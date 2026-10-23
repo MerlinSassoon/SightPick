@@ -19,6 +19,13 @@ class LLMError(RecruitingError):
     """视觉大模型接口调用或返回解析失败。"""
 
 
+class NonRetryableLLMError(LLMError):
+    """重试无意义的失败（如 4xx 非 429）。
+
+    客户端与异步 worker 据此区分“可重试的瞬时故障”与“重试也必然失败”。
+    """
+
+
 class AnchorNotFoundError(RecruitingError):
     """首轮未找到语义锚点（如“职位描述”），且视觉大模型确认不存在。"""
 

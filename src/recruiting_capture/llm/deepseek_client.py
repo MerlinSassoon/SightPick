@@ -15,7 +15,7 @@ import time
 from typing import Any, Sequence
 
 from ..capture.driver import Frame
-from ..errors import LLMError
+from ..errors import LLMError, NonRetryableLLMError
 from .client import AnchorConfirmation, ClickConfirmation
 from .prompts import (
     ANCHOR_SYSTEM,
@@ -34,8 +34,7 @@ DEFAULT_TIMEOUT = 60
 DEFAULT_RETRIES = 2
 
 
-class _NonRetryableLLMError(LLMError):
-    """4xx（非 429）错误：重试无意义，直接抛给调用方。"""
+_NonRetryableLLMError = NonRetryableLLMError  # 兼容旧名；新代码请直接用公开名
 
 
 def _extract_json(text: str, *, context: str = "大模型返回") -> dict[str, Any]:

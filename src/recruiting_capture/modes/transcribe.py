@@ -6,18 +6,16 @@ import logging
 
 from ..capture.driver import Frame
 from ..errors import AnchorNotFoundError, LLMError
-from ..models.config import FORMAT_STR, FORMAT_TUPLE, TranscribeConfig
+from ..models.config import TranscribeConfig
 from ..models.region import Region
 from ..ocr.engine import OcrLine
 from ..text_utils import (
-    clean_lines,
-    clean_title,
     compact,
     contains_marker,
     dedupe_lines,
-    pick_title_candidate,
 )
 from .base import BaseRegionMode, ModeContext
+from .denoise_ops import apply_expected_format, denoise_once, rule_based_result
 
 logger = logging.getLogger(__name__)
 
@@ -204,52 +202,28 @@ class TranscribeMode(BaseRegionMode):
         self, texts: list[str], frame: Frame | None
     ) -> str | list[str] | tuple[str, ...]:
         payload = dedupe_lines(texts)
-        try:
-            result = self.ctx.llm.denoise(
-                texts=payload,
-                frame=frame,
-                expected_content=self.config.expected_content,
-                expected_format=self.config.expected_format,
-                context={"region": self.region_name},
-            )
-        except LLMError as exc:
-            warning = (
-                f"区域 {self.region_name} 去噪调用大模型失败，按 R6 降级为规则清理：{exc}"
-            )
-            self.warnings.append(warning)
-            logger.warning(warning)
-            result = self._rule_based_result(payload)
-
-        return self._apply_format(result, payload)
+        result, warnings = denoise_once(
+            self.ctx.llm,
+            texts=payload,
+            frame=frame,
+            expected_content=self.config.expected_content,
+            expected_format=self.config.expected_format,
+            context={"region": self.region_name},
+        )
+        for warning in warnings:
+            message = f"区域 {self.region_name} {warning}"
+            self.warnings.append(message)
+            logger.warning(message)
+        return result
 
     def _rule_based_result(
         self, texts: list[str]
     ) -> str | list[str]:
-        cleaned = clean_lines(texts, drop_noise=True)
-        if self.config.expected_format == FORMAT_STR:
-            return clean_title(pick_title_candidate(cleaned))
-        return cleaned
+        return rule_based_result(texts, self.config.expected_format)
 
     def _apply_format(
         self,
         result: str | list[str] | tuple[str, ...],
         fallback_texts: list[str],
     ) -> str | list[str] | tuple[str, ...]:
-        fmt = self.config.expected_format
-        if fmt == FORMAT_STR:
-            if isinstance(result, str):
-                title = clean_title(result)
-            else:
-                title = clean_title(pick_title_candidate([str(item) for item in result]))
-            if title:
-                return title
-            return clean_title(pick_title_candidate(fallback_texts))
-        lines = (
-            [result]
-            if isinstance(result, str)
-            else [str(item) for item in result]
-        )
-        lines = dedupe_lines(line for line in lines if line.strip())
-        if fmt == FORMAT_TUPLE:
-            return tuple(lines)
-        return lines
+        return apply_expected_format(result, fallback_texts, self.config.expected_format)

@@ -64,14 +64,10 @@ def test_set_mode_drops_stale_custom_values(builder: PlanBuilder) -> None:
     assert cfg == default_transcribe_config()
 
 
-def test_existing_sms_invoke_target_is_left_alone_when_other_region_turns_sms(
+def test_existing_sms_invoke_target_is_left_alone_by_noop_mode_switch(
     builder: PlanBuilder,
 ) -> None:
-    """现状记录：只在“离开短信模式”时清理引用。
-
-    这里的断言描述的是**当前实现**，用于锁定既有行为的边界；
-    将来修复 ``set_mode`` 后本测试需要同步更新（见下方 xfail 的同一缺陷）。
-    """
+    """把区域切到它当前已有的模式是空操作，不得动其它区域的配置。"""
 
     builder.set_mode("A", MODE_SMS)
     builder.update_config("A", {"invoke_regions": ["B", "C"], "key_region": "C"})
@@ -81,16 +77,14 @@ def test_existing_sms_invoke_target_is_left_alone_when_other_region_turns_sms(
     assert builder.config("A")["key_region"] == "C"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="已知缺陷：set_mode 在区域“变成短信模式”时不清理其它短信区域的引用；"
-    "修复后删除本标记（见 docs/STREAMLIT_STATE_FIX_PLAN.md 第八节）",
-)
 def test_set_mode_sms_cleans_dangling_references(builder: PlanBuilder) -> None:
+    """区域变成短信模式后，其它短信区域不得再调用它、也不得再拿它做键。"""
+
     builder.set_mode("A", MODE_SMS)
     builder.update_config("A", {"invoke_regions": ["B", "C"], "key_region": "C"})
-    builder.set_mode("C", MODE_SMS)
-    assert "C" not in builder.config("A")["invoke_regions"]
+
+    builder.set_mode("C", MODE_SMS)  # C 不再是抄录区域
+    assert builder.config("A")["invoke_regions"] == ["B"]
     assert builder.config("A")["key_region"] is None
 
 

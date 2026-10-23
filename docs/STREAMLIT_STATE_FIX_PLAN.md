@@ -301,3 +301,82 @@ tests/test_streamlit_config_source.py   6 passed, 1 xfailed
 
 第二步：按方案 X 改造上述 42 处控件，并修复 8.3 的 builder 缺陷；验收标准为全量 `pytest` 全部通过（无 failed），再执行 6.1 手动验证清单。
 
+---
+
+## 九、第二步执行结果（2026-10-23）
+
+### 9.1 改造范围
+
+45 处控件全部按方案 X 处理（比第一步统计的 42 处多 3 处：`xmin/ymin/xmax/ymax` 计为独立控件、
+`measure_target` 与滚动测试页的 6 个控件在改造中一并纳入）：
+
+| 区域 | 数量 | 处理方式 |
+| --- | --- | --- |
+| 首屏设置（窗口方式、倒计时、API 路由值） | 3 | 去 key，改受控 |
+| 展示设置 `opt_max_width/height/quality` | 3 | 去 key，改受控 |
+| 测距目标 `measure_target` | 1 | 去 key，索引随会话值回填 |
+| 区域坐标 `xmin/ymin/xmax/ymax` | 4 | 去 key |
+| 配置页短信模式 | 13 | 去 key，`multiselect` 用 `default=` |
+| 配置页抄录模式 | 12 | 去 key |
+| 输出映射 `out_title/out_desc` | 2 | 去 key |
+| 滚动测试页 | 7 | 去 key |
+| 结果页 `result_run` | 1 | 去 key |
+| `api_page_value`（disabled 只读） | 1 | 去 key |
+
+新增辅助函数 `_clock_value()`，沿用既有 `_number_value` / `_select_value` 约定，
+负责“会话值 → 合法默认值”的范围收敛。
+
+### 9.2 关键发现：去掉 key 后暴露“元素 ID 重复”
+
+**这是静态测试抓不到、只有真实渲染才会暴露的问题。**
+
+按 Streamlit 源码（`elements/lib/utils.py::compute_and_register_element_id`），
+无 `key` 控件的元素 ID 由 **`(控件类型, label, options, index, help, horizontal …)`** 计算。
+配置页在 `for name in region_names` 循环里渲染，三个区域的“工作模式”单选框
+（label 都是 `"工作模式"`、options 相同、index 相同）因此得到**完全相同的 ID**，
+直接抛出 `StreamlitDuplicateElementId` 异常，页面白屏。
+
+**解决办法**：把所有循环内控件的 label 前缀上区域名（`f"{name} 工作模式"`），
+并用 `label_visibility="collapsed"` 隐藏，界面观感与原来一致（既有 `expander`
+标题已经标明当前区域），但每个控件获得了不同 ID。
+
+> 教训：`key` 原先顺带承担了“身份唯一”的职责。方案 X 去掉 key 后，
+> 必须由 label 接过这个职责——否则静态检查全绿、运行时却崩溃。
+
+### 9.3 防线补强
+
+针对 9.2 的教训，`test_streamlit_widget_policy.py` 新增一条静态约束：
+
+- `test_widget_labels_inside_loops_must_be_dynamic`：位于循环体内、**无 key** 且 label 为固定字面量的控件一律报错；
+- 带 key 的控件（如“删除”按钮 `key=f"del_{name}"`）不受此条约束，其唯一性由 `test_widget_keys_are_unique` 负责。
+
+### 9.4 builder 缺陷修复
+
+`plan_builder.py`：
+
+- 抽出 `_drop_transcribe_references(name)`，把“某区域不再是抄录区域”的清理逻辑收敛为单一实现；
+- `set_mode()` 在**两种模式分支之后**统一调用它（原来只在 transcribe 分支调用）；
+- `remove_region()` 复用同一函数，消除重复代码；
+- **函数签名与返回值均未改动**；`set_mode` 的空操作语义（切到当前已有模式）保持不变。
+
+`tests/test_streamlit_config_source.py` 中 `xfail(strict=True)` 标记已移除，
+`test_set_mode_sms_cleans_dangling_references` 现在是正常 passing 测试。
+
+### 9.5 验证结果
+
+```
+tests/test_streamlit_widget_policy.py    5 passed
+tests/test_streamlit_config_source.py    7 passed
+全量 pytest                               160 passed, 1 skipped, 0 failed
+Streamlit AppTest（空状态）                0 exception / 0 error / 0 duplication warning
+Streamlit AppTest（加载示例配置）          0 exception / 0 duplication warning
+   multiselect[A 调用抄录模式的区域] = ['C', 'B']   ← 与示例配置一致（原 bug 的症状已消失）
+   selectbox[A 做键的抄录区域] = C
+   selectbox[标题区域] = C ／ selectbox[描述区域] = B
+   radio[A 工作模式] = 短信模式；B/C = 抄录模式
+```
+
+AppTest 属临时校验脚本（`_verify_apptest.py` / `_verify_apptest2.py`），验证后已删除，未入库。
+如需纳入 CI，建议后续以 `streamlit.testing.v1.AppTest` 正式落为测试用例。
+
+

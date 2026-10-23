@@ -99,12 +99,7 @@ class PlanBuilder:
             self.title_region = None
         if self.desc_region == name:
             self.desc_region = None
-        for cfg in self.configs.values():
-            if cfg.get("mode") == MODE_SMS:
-                invoke = [item for item in cfg.get("invoke_regions", []) if item != name]
-                cfg["invoke_regions"] = invoke
-                if cfg.get("key_region") == name:
-                    cfg["key_region"] = None
+        self._drop_transcribe_references(name)
 
     def set_region_coords(self, name: str, coords: Sequence[Any]) -> None:
         if name not in self.regions:
@@ -125,15 +120,27 @@ class PlanBuilder:
             self.configs[name] = default_sms_config()
         else:
             self.configs[name] = default_transcribe_config()
-            for cfg in self.configs.values():
-                if cfg.get("mode") == MODE_SMS and name in cfg.get("invoke_regions", []):
-                    cfg["invoke_regions"] = [i for i in cfg["invoke_regions"] if i != name]
-                if cfg.get("key_region") == name:
-                    cfg["key_region"] = None
+        # 无论切到哪种模式，该区域都已不再是“可被调用的抄录区域”：
+        # 其它短信区域指向它的 invoke_regions / key_region 必须同步清理，
+        # 否则运行期会去调用一个不存在的抄录模式实例。
+        self._drop_transcribe_references(name)
+        if mode == MODE_TRANSCRIBE:
             if self.title_region == name:
                 self.title_region = None
             if self.desc_region == name:
                 self.desc_region = None
+
+    def _drop_transcribe_references(self, name: str) -> None:
+        """把 ``name`` 从所有短信区域的调用列表与做键区域中摘掉。"""
+
+        for cfg in self.configs.values():
+            if cfg.get("mode") != MODE_SMS:
+                continue
+            invoke = cfg.get("invoke_regions") or []
+            if name in invoke:
+                cfg["invoke_regions"] = [item for item in invoke if item != name]
+            if cfg.get("key_region") == name:
+                cfg["key_region"] = None
 
     def config(self, name: str) -> dict[str, Any]:
         return self.configs[name]

@@ -204,6 +204,14 @@ def _select_value(returned: object, options: list[str], key: str, default_index:
     return options[default_index]
 
 
+def _clock_value(stored: object, key: str, default: int) -> int:
+    """number_input 的 ``value=``：沿用会话里已存的值，缺失时回退默认值且不越界。"""
+
+    if isinstance(stored, (int, float)) and not isinstance(stored, bool):
+        return max(1, min(60, int(stored)))
+    return int(default)
+
+
 def _quality_label(quality: int) -> str:
     """质量数值 → 下拉框选项文案（找不到时回退到“中”）。"""
 
@@ -836,9 +844,15 @@ with tab_capture:
         window_mode = st.radio(
             "窗口处理方式",
             WIN_MODE_CHOICES,
-            index=WIN_MODE_CHOICES.index(WIN_MODE_COUNTDOWN),
+            index=WIN_MODE_CHOICES.index(
+                _select_value(
+                    st.session_state.get("capture_window_mode"),
+                    WIN_MODE_CHOICES,
+                    "capture_window_mode",
+                    WIN_MODE_CHOICES.index(WIN_MODE_COUNTDOWN),
+                )
+            ),
             horizontal=True,
-            key="capture_window_mode",
             help=(
                 "自动最小化：按下方“前端窗口标题关键字”定位并只最小化该前端窗口，"
                 "截图后在后台恢复，不会影响命令行/终端；"
@@ -852,7 +866,6 @@ with tab_capture:
                 "URL ?page= 路由值（仅用于在标题命中后精确路由）",
                 value=page_keyword_available or "",
                 disabled=True,
-                key="api_page_value",
             )
         # 窗口标题关键字是主匹配条件：两个入口共用同一个会话键，值始终一致
         window_title = _render_window_keyword_input(
@@ -863,18 +876,25 @@ with tab_capture:
                 "API 模式的 ?page= 只作为附加条件：窗口标题仍必须先命中上面的关键字，"
                 "?page= 仅用于在多个匹配窗口中精确选择。"
             )
-        countdown_seconds = st.number_input(
+        raw_countdown = st.number_input(
             "倒计时秒数",
             min_value=1,
             max_value=60,
-            value=DEFAULT_COUNTDOWN_SECONDS,
+            value=_clock_value(
+                st.session_state.get("capture_countdown_seconds"),
+                "capture_countdown_seconds",
+                DEFAULT_COUNTDOWN_SECONDS,
+            ),
             step=1,
-            key="capture_countdown_seconds",
             help=(
                 "仅在“倒计时模式”下生效：点击截取首屏后先显示倒计时，结束后（并固定等待 "
                 f"{STABILIZE_SECONDS:g} 秒页面稳定）再执行截图识别。"
             ),
         )
+        countdown_seconds = _number_value(
+            raw_countdown, "capture_countdown_seconds", DEFAULT_COUNTDOWN_SECONDS
+        )
+        st.session_state["capture_countdown_seconds"] = countdown_seconds
         if window_mode == WIN_MODE_COUNTDOWN:
             st.caption(
                 f"倒计时结束后会固定等待 {STABILIZE_SECONDS:g} 秒再截图；"
@@ -983,7 +1003,6 @@ with tab_capture:
                 max_value=3840,
                 value=int(st.session_state["display_max_width"]),
                 step=80,
-                key="opt_max_width",
             ),
             "opt_max_width",
             int(st.session_state["display_max_width"]),
@@ -995,19 +1014,24 @@ with tab_capture:
                 max_value=2160,
                 value=int(st.session_state["display_max_height"]),
                 step=40,
-                key="opt_max_height",
             ),
             "opt_max_height",
             int(st.session_state["display_max_height"]),
         )
+        quality_choices = list(DISPLAY_QUALITY_CHOICES)
+        stored_quality = st.session_state.get("opt_quality")
+        quality_index = (
+            quality_choices.index(stored_quality)
+            if isinstance(stored_quality, str) and stored_quality in quality_choices
+            else 1
+        )
         quality_label = _select_value(
             col_q.selectbox(
                 "展示图片质量（仅影响前端加载速度，不影响坐标）",
-                list(DISPLAY_QUALITY_CHOICES),
-                index=1,
-                key="opt_quality",
+                quality_choices,
+                index=quality_index,
             ),
-            list(DISPLAY_QUALITY_CHOICES),
+            quality_choices,
             "opt_quality",
             1,
         )
@@ -1034,7 +1058,17 @@ with tab_capture:
         if measure_mode:
             names = list(builder.regions)
             if names:
-                measure_target = st.selectbox("应用到区域", names, key="measure_target")
+                stored_target = st.session_state.get("measure_target")
+                measure_target = st.selectbox(
+                    "应用到区域",
+                    names,
+                    index=(
+                        names.index(stored_target)
+                        if isinstance(stored_target, str) and stored_target in names
+                        else 0
+                    ),
+                )
+                st.session_state["measure_target"] = measure_target
             else:
                 st.info("请先框选至少一个区域。")
         else:
@@ -1157,16 +1191,16 @@ with tab_capture:
                 cols[0].markdown(f"### {name}")
                 new_values = [
                     cols[1].number_input(
-                        "xmin", value=int(coords[0]), min_value=0, key=f"xmin_{name}", label_visibility="collapsed"
+                        f"{name} xmin", value=int(coords[0]), min_value=0, label_visibility="collapsed"
                     ),
                     cols[2].number_input(
-                        "ymin", value=int(coords[1]), min_value=0, key=f"ymin_{name}", label_visibility="collapsed"
+                        f"{name} ymin", value=int(coords[1]), min_value=0, label_visibility="collapsed"
                     ),
                     cols[3].number_input(
-                        "xmax", value=int(coords[2]), min_value=0, key=f"xmax_{name}", label_visibility="collapsed"
+                        f"{name} xmax", value=int(coords[2]), min_value=0, label_visibility="collapsed"
                     ),
                     cols[4].number_input(
-                        "ymax", value=int(coords[3]), min_value=0, key=f"ymax_{name}", label_visibility="collapsed"
+                        f"{name} ymax", value=int(coords[3]), min_value=0, label_visibility="collapsed"
                     ),
                 ]
                 mode = builder.configs[name].get("mode")
@@ -1227,12 +1261,15 @@ with tab_config:
                 f"区域 {name} —— {'短信模式（目录列表）' if mode == MODE_SMS else '抄录模式（文本块）'}",
                 expanded=True,
             ):
+                # 无 key 时，控件元素 ID 由 label 等参数决定；同一循环里重复的 label
+                # 会触发 StreamlitDuplicateElementId。故所有 label 统一带区域名，
+                # 既保持界面可读，又保证每个区域的控件 ID 唯一。
                 mode_label = st.radio(
-                    "工作模式",
+                    f"{name} 工作模式",
                     ["短信模式", "抄录模式"],
                     index=0 if mode == MODE_SMS else 1,
-                    key=f"mode_{name}",
                     horizontal=True,
+                    label_visibility="collapsed",
                 )
                 desired_mode = MODE_SMS if mode_label == "短信模式" else MODE_TRANSCRIBE
                 if desired_mode != mode:
@@ -1241,42 +1278,39 @@ with tab_config:
 
                 if desired_mode == MODE_SMS:
                     scroll_distance = st.number_input(
-                        "滚动距离（负值向下）",
+                        f"{name} 滚动距离（负值向下）",
                         value=int(cfg.get("scroll_distance") or -180),
                         step=10,
-                        key=f"sd_{name}",
+                        label_visibility="collapsed",
                     )
                     start_text = st.text_input(
-                        "滚动起始坐标 [x, y]",
+                        f"{name} 滚动起始坐标 [x, y]",
                         value=_point_text(cfg.get("scroll_start")),
-                        key=f"ss_{name}",
+                        label_visibility="collapsed",
                     )
                     markers = st.text_input(
-                        "滚动停止条件（多个用逗号分隔）",
+                        f"{name} 滚动停止条件（多个用逗号分隔）",
                         value="、".join(cfg.get("scroll_stop_markers") or []),
-                        key=f"sm_{name}",
+                        label_visibility="collapsed",
                     )
                     stop_match = st.selectbox(
-                        "停止条件匹配方式",
+                        f"{name} 停止条件匹配方式",
                         ["substring", "exact"],
                         index=0 if cfg.get("scroll_stop_match", "substring") == "substring" else 1,
-                        key=f"stopmatch_{name}",
                         help="默认按“包含”匹配，避免关键字与其它文本连写导致无法停止（修复 NEWREADME 9.4-3）。",
                     )
                     transcribe_options = [
                         item for item in region_names if builder.configs[item].get("mode") == MODE_TRANSCRIBE
                     ]
                     invoke = st.multiselect(
-                        "调用抄录模式的区域（按顺序调用）",
+                        f"{name} 调用抄录模式的区域（按顺序调用）",
                         transcribe_options,
                         default=[item for item in cfg.get("invoke_regions", []) if item in transcribe_options],
-                        key=f"invoke_{name}",
                     )
                     structure_label = st.selectbox(
-                        "文本数据结构",
+                        f"{name} 文本数据结构",
                         ["字典模式", "集合模式"],
                         index=0 if cfg.get("data_structure") == "dict" else 1,
-                        key=f"ds_{name}",
                     )
                     structure = "dict" if structure_label == "字典模式" else "set"
                     key_region = None
@@ -1284,42 +1318,40 @@ with tab_config:
                         key_options = ["（未选择）"] + invoke
                         current_key = cfg.get("key_region")
                         key_region = st.selectbox(
-                            "做键的抄录区域（结果须可哈希）",
+                            f"{name} 做键的抄录区域（结果须可哈希）",
                             key_options,
                             index=key_options.index(current_key) if current_key in key_options else 0,
-                            key=f"key_{name}",
                         )
                         key_region = None if key_region == "（未选择）" else key_region
                     max_items = st.number_input(
-                        "本区域份数上限（0 表示不单独限制）",
+                        f"{name} 本区域份数上限（0 表示不单独限制）",
                         value=int(cfg.get("max_items") or 0),
                         min_value=0,
                         step=1,
-                        key=f"maxitems_{name}",
+                        label_visibility="collapsed",
                     )
                     verify_click = st.checkbox(
-                        "点击后由视觉大模型确认命中（默认关闭，见 D2）",
+                        f"{name} 点击后由视觉大模型确认命中（默认关闭，见 D2）",
                         value=bool(cfg.get("verify_click")),
-                        key=f"verify_{name}",
                     )
                     col_a, col_b = st.columns(2)
                     rollback_step = col_a.number_input(
-                        "回滚步长",
+                        f"{name} 回滚步长",
                         value=int(cfg.get("rollback_step", 50)),
                         min_value=1,
-                        key=f"rollback_{name}",
+                        label_visibility="collapsed",
                     )
                     max_click_retries = col_b.number_input(
-                        "最大点击重试次数",
+                        f"{name} 最大点击重试次数",
                         value=int(cfg.get("max_click_retries", 3)),
                         min_value=1,
-                        key=f"clickretry_{name}",
+                        label_visibility="collapsed",
                     )
                     max_rounds = st.number_input(
-                        "最大循环轮次（安全阀）",
+                        f"{name} 最大循环轮次（安全阀）",
                         value=int(cfg.get("max_rounds", 30)),
                         min_value=1,
-                        key=f"smsrounds_{name}",
+                        label_visibility="collapsed",
                     )
                     start_point = _parse_point(start_text)
                     if start_text.strip() and start_point is None:
@@ -1343,9 +1375,8 @@ with tab_config:
                     )
                 else:
                     scrollable = st.checkbox(
-                        "该区域可滚动",
+                        f"{name} 该区域可滚动",
                         value=bool(cfg.get("scrollable")),
-                        key=f"scrollable_{name}",
                     )
                     scroll_distance = cfg.get("scroll_distance")
                     start_text = _point_text(cfg.get("scroll_start"))
@@ -1353,57 +1384,54 @@ with tab_config:
                     stop_match = cfg.get("scroll_stop_match", "substring")
                     if scrollable:
                         scroll_distance = st.number_input(
-                            "滚动距离（负值向下）",
+                            f"{name} 滚动距离（负值向下）",
                             value=int(cfg.get("scroll_distance") or -180),
                             step=10,
-                            key=f"td_{name}",
+                            label_visibility="collapsed",
                         )
                         start_text = st.text_input(
-                            "滚动起始坐标 [x, y]",
+                            f"{name} 滚动起始坐标 [x, y]",
                             value=_point_text(cfg.get("scroll_start")),
-                            key=f"ts_{name}",
+                            label_visibility="collapsed",
                         )
                         markers_text = st.text_input(
-                            "滚动停止条件（多个用逗号分隔）",
+                            f"{name} 滚动停止条件（多个用逗号分隔）",
                             value="、".join(cfg.get("scroll_stop_markers") or []),
-                            key=f"tm_{name}",
+                            label_visibility="collapsed",
                         )
                         stop_match = st.selectbox(
-                            "停止条件匹配方式",
+                            f"{name} 停止条件匹配方式",
                             ["substring", "exact"],
                             index=0 if cfg.get("scroll_stop_match", "substring") == "substring" else 1,
-                            key=f"tstopmatch_{name}",
                         )
                     expected_content = st.text_input(
-                        "期望内容（语义提示，如“职位描述”）",
+                        f"{name} 期望内容（语义提示，如“职位描述”）",
                         value=cfg.get("expected_content") or "",
-                        key=f"content_{name}",
+                        label_visibility="collapsed",
                     )
                     format_label = st.selectbox(
-                        "期望格式",
+                        f"{name} 期望格式",
                         ["list（列表）", "str（字符串）", "tuple（元组）"],
                         index={"list": 0, "str": 1, "tuple": 2}.get(
                             cfg.get("expected_format", "list"), 0
                         ),
-                        key=f"format_{name}",
                     )
                     expected_format = format_label.split("（")[0]
                     anchor_key = st.text_input(
-                        "首轮锚点关键字（可留空）",
+                        f"{name} 首轮锚点关键字（可留空）",
                         value=cfg.get("anchor_key") or "",
-                        key=f"anchor_{name}",
                         help="例如职位描述区域填“职位描述”；首轮找不到时由视觉大模型确认（8.3.2）。",
+                        label_visibility="collapsed",
                     )
                     max_rounds = st.number_input(
-                        "最大滚动轮次",
+                        f"{name} 最大滚动轮次",
                         value=int(cfg.get("max_rounds", 12)),
                         min_value=1,
-                        key=f"trounds_{name}",
+                        label_visibility="collapsed",
                     )
                     auto_adjust = st.checkbox(
-                        "锚点修正后自动应用建议滚动距离（默认关闭）",
+                        f"{name} 锚点修正后自动应用建议滚动距离（默认关闭）",
                         value=bool(cfg.get("auto_adjust_scroll")),
-                        key=f"adjust_{name}",
                     )
                     start_point = _parse_point(start_text) if start_text.strip() else None
                     if scrollable and start_text.strip() and start_point is None:
@@ -1439,8 +1467,8 @@ with tab_config:
             if builder.desc_region in options
             else 0
         )
-        title_choice = col_title.selectbox("标题区域", options, index=title_index, key="out_title")
-        desc_choice = col_desc.selectbox("描述区域", options, index=desc_index, key="out_desc")
+        title_choice = col_title.selectbox("标题区域", options, index=title_index)
+        desc_choice = col_desc.selectbox("描述区域", options, index=desc_index)
         if col_auto.button("自动推荐"):
             title_suggestion, desc_suggestion = builder.suggest_output_regions()
             builder.set_output_regions(title_suggestion, desc_suggestion)
@@ -1462,19 +1490,29 @@ with tab_scroll:
         st.info("请先框选区域。")
     else:
         names = list(builder.regions)
-        region_name = st.selectbox("测试区域", names, key="scroll_region")
+        stored_region = st.session_state.get("scroll_region")
+        region_name = st.selectbox(
+            "测试区域",
+            names,
+            index=(
+                names.index(stored_region)
+                if isinstance(stored_region, str) and stored_region in names
+                else 0
+            ),
+        )
+        st.session_state["scroll_region"] = region_name
         cfg = builder.config(region_name)
         default_start = cfg.get("scroll_start") or [400, 500]
         col_x, col_y, col_d, col_t = st.columns(4)
-        x = col_x.number_input("x", value=int(default_start[0]), min_value=0, key="scroll_x")
-        y = col_y.number_input("y", value=int(default_start[1]), min_value=0, key="scroll_y")
+        x = col_x.number_input("x", value=int(default_start[0]), min_value=0)
+        y = col_y.number_input("y", value=int(default_start[1]), min_value=0)
         distance = col_d.number_input(
-            "滚动距离", value=int(cfg.get("scroll_distance") or -180), step=10, key="scroll_distance"
+            "滚动距离", value=int(cfg.get("scroll_distance") or -180), step=10
         )
-        times = col_t.number_input("次数", value=5, min_value=1, key="scroll_times")
+        times = col_t.number_input("次数", value=5, min_value=1)
         col_i, col_delay, col_btn = st.columns([1, 1, 2])
-        interval = col_i.number_input("间隔（秒）", value=0.5, min_value=0.1, step=0.1, key="scroll_interval")
-        delay = col_delay.number_input("倒计时（秒）", value=3, min_value=0, key="scroll_delay")
+        interval = col_i.number_input("间隔（秒）", value=0.5, min_value=0.1, step=0.1)
+        delay = col_delay.number_input("倒计时（秒）", value=3, min_value=0)
         if col_btn.button("开始滚动测试", type="primary"):
             UI_DIR.mkdir(parents=True, exist_ok=True)
             log_path = UI_DIR / "scroll_test.log"
@@ -1619,7 +1657,17 @@ with tab_results:
         st.info("暂无运行记录。先运行演示模式或真实采集。")
     else:
         labels = [run.name for run in runs]
-        selected = st.selectbox("选择运行目录", labels, index=0, key="result_run")
+        stored_run = st.session_state.get("result_run")
+        selected = st.selectbox(
+            "选择运行目录",
+            labels,
+            index=(
+                labels.index(stored_run)
+                if isinstance(stored_run, str) and stored_run in labels
+                else 0
+            ),
+        )
+        st.session_state["result_run"] = selected
         run_dir = RUNS_DIR / selected
         report = read_report(run_dir)
         records = read_jsonl(run_dir / "jobs.jsonl")

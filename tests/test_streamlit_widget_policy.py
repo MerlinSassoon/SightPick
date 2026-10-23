@@ -57,12 +57,21 @@ VALUE_KWARGS = frozenset({"value", "default", "index"})
 
 
 class _WidgetCall:
-    __slots__ = ("lineno", "name", "keyword_args")
+    __slots__ = ("lineno", "name", "keyword_args", "label", "enclosing_loop")
 
-    def __init__(self, lineno: int, name: str, keyword_args: dict[str, ast.expr]) -> None:
+    def __init__(
+        self,
+        lineno: int,
+        name: str,
+        keyword_args: dict[str, ast.expr],
+        label: str | None,
+        enclosing_loop: bool,
+    ) -> None:
         self.lineno = lineno
         self.name = name
         self.keyword_args = keyword_args
+        self.label = label
+        self.enclosing_loop = enclosing_loop
 
     @property
     def span(self) -> set[str]:
@@ -84,6 +93,14 @@ def _key_name(node: ast.AST) -> str | None:
     func = node.func
     if isinstance(func, ast.Attribute) and func.attr in WIDGET_NAMES:
         return func.attr
+    return None
+
+
+def _label_text(expr: ast.expr | None) -> str | None:
+    """控件 label 的静态文本；动态拼接时返回 ``None``（视为“随区域变化”）。"""
+
+    if isinstance(expr, ast.Constant) and isinstance(expr.value, str):
+        return expr.value
     return None
 
 
@@ -109,14 +126,39 @@ def _literal_names(expr: ast.expr | None) -> set[str]:
     return set()
 
 
+_LOOP_NODES = (ast.For, ast.AsyncFor, ast.While)
+
+
 def _collect_widgets(tree: ast.AST) -> list[_WidgetCall]:
+    """收集控件调用，并记录它是否位于循环体内、以及 label 的静态文本。"""
+
     found: list[_WidgetCall] = []
-    for node in ast.walk(tree):
-        name = _key_name(node)
-        if name is None:
-            continue
-        kwargs = {kw.arg: kw.value for kw in node.keywords if kw.arg is not None}
-        found.append(_WidgetCall(node.lineno, name, kwargs))
+
+    def visit(node: ast.AST, in_loop: bool) -> None:
+        for child in ast.iter_child_nodes(node):
+            child_in_loop = in_loop or isinstance(child, _LOOP_NODES)
+            name = _key_name(child)
+            if name is not None:
+                kwargs = {kw.arg: kw.value for kw in child.keywords if kw.arg is not None}
+                label_node = (
+                    child.args[0]
+                    if child.args
+                    else kwargs.get("label")
+                )
+                found.append(
+                    _WidgetCall(
+                        child.lineno,
+                        name,
+                        kwargs,
+                        _label_text(label_node),
+                        in_loop,
+                    )
+                )
+            visit(child, child_in_loop)
+
+    visit(tree, False)
+    found.sort(key=lambda item: item.lineno)
+    return found
     found.sort(key=lambda item: item.lineno)
     return found
 
@@ -158,6 +200,31 @@ def test_keyed_widget_must_not_pass_value_default_or_index(
             f"{lines}\n"
             "修复方向见 docs/STREAMLIT_STATE_FIX_PLAN.md 方案 X："
             "配置读自 builder 的控件去掉 key=，只用 value=/index= 受控。",
+            pytrace=False,
+        )
+
+
+def test_widget_labels_inside_loops_must_be_dynamic(widgets: list[_WidgetCall]) -> None:
+    """循环体里“无 key”的控件，label 必须随循环变量变化。
+
+    Streamlit 的元素 ID 由 ``(控件类型, label, options, index …)`` 计算；无 ``key`` 时，
+    同一循环里两个 label 完全相同的控件会得到相同 ID，直接抛
+    ``StreamlitDuplicateElementId``（去 key 改造后在配置页真实发生过）。
+
+    带 ``key`` 的控件由 key 决定身份，不受本条约束（其唯一性由
+    ``test_widget_keys_are_unique`` 负责）。
+    """
+
+    offenders = [
+        f"  app/streamlit_app.py:{w.lineno}  st.{w.name}(label={w.label!r})"
+        for w in widgets
+        if w.enclosing_loop and w.label is not None and not w.span
+    ]
+    if offenders:
+        pytest.fail(
+            "以下控件位于循环体内、无 key 且 label 是固定字面量，多个实例会产生相同元素 ID：\n"
+            + "\n".join(offenders)
+            + "\n请把区域名等循环变量拼进 label（例如 f\"{name} 滚动距离\"）。",
             pytrace=False,
         )
 

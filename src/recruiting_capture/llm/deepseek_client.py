@@ -29,7 +29,7 @@ from .prompts import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_BASE_URL = "https://api.deepseek.com"
-DEFAULT_MODEL = "deepseek-flash"
+DEFAULT_MODEL = "DeepSeek-V4.1-Flash-1017"
 DEFAULT_TIMEOUT = 60
 DEFAULT_RETRIES = 2
 
@@ -147,8 +147,10 @@ class DeepSeekClient:
             "model": self.model,
             "messages": self._messages(system, prompt, frame),
             "temperature": 0,
-            "max_tokens": 2048,
+            "max_tokens": 4096,
             "response_format": {"type": "json_object"},
+            # 删除 "temperature": 0, 和顶层 "reasoning_effort": "none"
+            "thinking": {"type": "disabled"},  # 👈 用这个来关闭思考
         }
         headers = {
             "Authorization": f"Bearer {self.api_key}",

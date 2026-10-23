@@ -1,0 +1,83 @@
+{
+  "schema_version": "1.0",
+  "name": "boss-demo",
+  "screen": {
+    "width": 1920,
+    "height": 1080,
+    "screenshot_width": 1920,
+    "screenshot_height": 1080
+  },
+  "regions": {
+    "A": [212, 300, 620, 930],
+    "B": [660, 440, 1460, 930],
+    "C": [660, 330, 1460, 430]
+  },
+  "region_configs": {
+    "A": {
+      "mode": "sms",
+      "scroll_distance": -210,
+      "scroll_start": [410, 380],
+      "scroll_stop_markers": ["企业服务", "使用与帮助"],
+      "scroll_stop_match": "substring",
+      "invoke_regions": ["C", "B"],
+      "data_structure": "dict",
+      "key_region": "C",
+      "max_items": 10,
+      "verify_click": false,
+      "rollback_step": 50,
+      "max_click_retries": 3,
+      "max_rounds": 10
+    },
+    "B": {
+      "mode": "transcribe",
+      "scrollable": true,
+      "scroll_distance": -180,
+      "scroll_start": [700, 900],
+      "scroll_stop_markers": ["工作地址", "去App", "先生"],
+      "scroll_stop_match": "substring",
+      "expected_content": "职位描述",
+      "expected_format": "list",
+      "anchor_key": "职位描述",
+      "max_rounds": 12,
+      "max_stale_rounds": 2,
+      "denoise_per_round": false,
+      "auto_adjust_scroll": false
+    },
+    "C": {
+      "mode": "transcribe",
+      "scrollable": false,
+      "expected_content": "岗位名称",
+      "expected_format": "str",
+      "max_rounds": 1
+    }
+  },
+  "output": {
+    "dir": "runtime/output",
+    "formats": ["jsonl", "json"],
+    "title_region": "C",
+    "desc_region": "B",
+    "extra_fields": {}
+  },
+  "run": {
+    "max_jobs": 10,
+    "engine": "mock",
+    "llm": "mock",
+    "mock_scenario": "data/samples/demo_story.json",
+    "llm_model": "deepseek-flash",
+    "llm_base_url": "https://api.deepseek.com",
+    "llm_timeout_seconds": 60,
+    "llm_max_retries": 2,
+    "minimize_frontend": false,
+    "window_title": "Streamlit",
+    "start_delay_seconds": 0,
+    "ocr_confidence_threshold": 0.8,
+    "click_pause_seconds": 0.01,
+    "scroll_pause_seconds": 0.01,
+    "min_action_interval_seconds": 0.0,
+    "max_action_interval_seconds": 0.0,
+    "on_job_error": "abort",
+    "on_screen_change": "abort",
+    "save_screenshots": false,
+    "px_per_scroll_unit": 1.0
+  }
+}

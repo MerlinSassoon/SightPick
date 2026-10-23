@@ -20,10 +20,10 @@ from .client import AnchorConfirmation, ClickConfirmation
 from .prompts import (
     ANCHOR_SYSTEM,
     CLICK_SYSTEM,
-    DENOISE_SYSTEM,
     build_anchor_prompt,
     build_click_prompt,
     build_denoise_prompt,
+    build_denoise_system,
 )
 
 logger = logging.getLogger(__name__)
@@ -214,7 +214,7 @@ class DeepSeekClient:
         context: dict[str, Any] | None = None,
     ) -> str | list[str] | tuple[str, ...]:
         payload = self._chat_json(
-            DENOISE_SYSTEM,
+            build_denoise_system(expected_content),
             build_denoise_prompt(texts, expected_content, expected_format),
             frame,
         )

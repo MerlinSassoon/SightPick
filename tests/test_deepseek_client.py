@@ -89,6 +89,35 @@ def test_denoise_str_format() -> None:
     assert result == "python开发工程师"
 
 
+def test_denoise_sends_tag_contract_only_when_expected(monkeypatch) -> None:
+    """标签契约必须随 expected_content 动态下发，而不是永远拼在 system 里。"""
+
+    client = _client(FakeSession([]))
+    systems: list[str] = []
+
+    def fake_chat_json(system, prompt, frame):
+        systems.append(system)
+        return {"result": []}
+
+    monkeypatch.setattr(client, "_chat_json", fake_chat_json)
+
+    client.denoise(
+        texts=["职位描述", "人工智能"],
+        frame=None,
+        expected_content="职位标签与职位描述",
+        expected_format="list",
+    )
+    client.denoise(
+        texts=["职位描述"],
+        frame=None,
+        expected_content="职位描述",
+        expected_format="list",
+    )
+
+    assert "标签：A、B、C" in systems[0]
+    assert "标签：A、B、C" not in systems[1]
+
+
 def test_confirm_anchor_parsing() -> None:
     session = FakeSession(
         [

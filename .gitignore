@@ -46,6 +46,9 @@ pip-wheel-metadata/
 # 5. 测试与静态检查缓存
 # ---------------------------------------------------------------------------
 .pytest_cache/
+.pytest_cache*
+# pytest 的临时目录（--basetemp 或 project-root 落盘），每次运行都会重建
+pytest-of-*/
 .mypy_cache/
 .ruff_cache/
 .coverage

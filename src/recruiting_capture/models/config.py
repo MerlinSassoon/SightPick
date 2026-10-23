@@ -708,6 +708,10 @@ class CapturePlan:
         for name, region in self.regions.items():
             region.validate_bounds(self.screen.screenshot_width, self.screen.screenshot_height)
             config = self.region_configs[name]
+            # 单区域自身的约束（必填项、枚举、滚动参数等）：from_dict 会调，但绕过
+            # from_dict 直接构造的计划同样要过这一关，否则 save_profile / rescale_plan
+            # 的"先校验后落盘"只能挡住跨区域问题，挡不住区域内的非法配置。
+            config.validate(f"区域 {name}")
             if isinstance(config, TranscribeConfig):
                 if region.width < 20 or region.height < 20:
                     raise ConfigError(f"抄录区域 {name} 过小（至少 20x20），请重新框选")

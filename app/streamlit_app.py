@@ -17,6 +17,7 @@ import hashlib
 import inspect
 import io
 import json
+import os
 import subprocess
 import sys
 import time
@@ -52,8 +53,20 @@ from recruiting_capture.display import (  # noqa: E402
 )
 from recruiting_capture.errors import ConfigError  # noqa: E402
 from recruiting_capture.imaging import render_regions  # noqa: E402
-from recruiting_capture.models.config import MODE_SMS, MODE_TRANSCRIBE  # noqa: E402
+from recruiting_capture.models.config import (  # noqa: E402
+    MODE_SMS,
+    MODE_TRANSCRIBE,
+    CapturePlan,
+)
 from recruiting_capture.models.plan_io import load_plan, plan_to_dict, save_plan  # noqa: E402
+from recruiting_capture.models.profile_io import (  # noqa: E402
+    capture_plan_from_dict,
+    list_profiles,
+    load_profile,
+    profile_filename,
+    rescale_plan,
+    save_profile,
+)
 from recruiting_capture.models.region import Region, ScreenGeometry  # noqa: E402
 from recruiting_capture.plan_builder import PlanBuilder  # noqa: E402
 from recruiting_capture.storage.reader import (  # noqa: E402
@@ -66,6 +79,10 @@ from recruiting_capture.storage.writers import create_run_dir  # noqa: E402
 
 RUNS_DIR = ROOT / "runtime" / "runs"
 PLANS_DIR = ROOT / "runtime" / "plans"
+#: 配置档案目录；``RECRUITING_PROFILES_DIR`` 可覆盖（便于测试与便携部署）
+PROFILES_DIR = Path(
+    os.environ.get("RECRUITING_PROFILES_DIR") or ROOT / "configs" / "profiles"
+)
 UI_DIR = ROOT / "runtime" / "ui"
 SAMPLES_DIR = ROOT / "data" / "samples"
 SAMPLE_SCREENSHOT = SAMPLES_DIR / "screenshot_1080p.png"
@@ -133,6 +150,8 @@ def _init_state() -> None:
         "run_dir": None,
         "plan_path": None,
         "scroll_proc": None,
+        "builder_notice": None,
+        "profile_pending_delete": None,
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
@@ -701,7 +720,11 @@ def _reset_ui_with_builder(
     *,
     display_mapping: DisplayMapping | None = None,
 ) -> None:
-    """结构性变更（换截图尺寸、加载示例）后重建控件状态，避免旧控件值覆盖新配置。"""
+    """结构性变更（换截图/换展示映射）后重建控件状态，避免旧控件值覆盖新配置。
+
+    注意：加载配置档案**不走这里**——档案只替换 ``builder``，截图文案与展示映射未变，
+    用 :func:`_apply_builder` 的轻量重置即可，否则会连带清掉窗口关键字、画质设置与运行状态。
+    """
 
     st.session_state.clear()
     _init_state()
@@ -720,6 +743,214 @@ def _reset_ui_with_builder(
     st.session_state["picker_nonce"] = 1
     st.session_state["last_pick_signature"] = None
     st.rerun()
+
+
+# ---------------------------------------------------------------------- #
+# 配置档案（保存 / 加载 / 导入）
+# ---------------------------------------------------------------------- #
+def _rerun_with_notice(
+    message: str | None = None, warnings: list[str] | None = None
+) -> None:
+    """把提示写入会话后 rerun：本次 run 的 ``st.success`` 会被 rerun 丢弃。"""
+
+    st.session_state["builder_notice"] = {
+        "message": message,
+        "warnings": list(warnings or []),
+    }
+    st.rerun()
+
+
+def _render_builder_notice() -> None:
+    notice = st.session_state.pop("builder_notice", None)
+    if not notice:
+        return
+    message = notice.get("message")
+    if message:
+        st.success(message)
+    for warning in notice.get("warnings") or []:
+        st.warning(warning)
+
+
+def _apply_builder(
+    new_builder: PlanBuilder,
+    *,
+    message: str | None = None,
+    warnings: list[str] | None = None,
+) -> None:
+    """轻量替换 builder：只重置框选/测距状态，不清空整个会话。
+
+    「加载示例配置」「加载档案」「导入文件」三个入口都走这里，避免行为分叉。
+    """
+
+    st.session_state["builder"] = new_builder
+    st.session_state["pending_point"] = None
+    st.session_state["measure_start"] = None
+    st.session_state["measure_mode"] = False
+    st.session_state["last_pick_signature"] = None
+    st.session_state["picker_nonce"] = int(st.session_state.get("picker_nonce") or 0) + 1
+    _rerun_with_notice(message, warnings)
+
+
+def _consume_pending_profile_delete() -> None:
+    """删除档案的第二步：在 selectbox 实例化之前清掉它的 key。
+
+    Streamlit 不允许在控件实例化之后修改同名会话键，因此删除动作只登记意图，
+    真正的 ``pop`` 放到下一次 run 的最前面。
+    """
+
+    pending = st.session_state.pop("profile_pending_delete", None)
+    if not pending:
+        return
+    st.session_state.pop("profile_select", None)
+    st.session_state.pop("profile_confirm_delete", None)
+    st.session_state["builder_notice"] = {
+        "message": f"已删除档案：{pending}",
+        "warnings": [],
+    }
+
+
+def _load_plan_into_builder(
+    plan: CapturePlan, current: PlanBuilder | None, *, message: str
+) -> None:
+    """统一加载入口：按截图像素等比换算后替换 builder（示例/档案/导入共用）。"""
+
+    if current is None:
+        st.error("请先在“① 截图与框选”中截取首屏，再加载配置。")
+        return
+    try:
+        scaled, warnings = rescale_plan(plan, current.screen)
+    except ConfigError as exc:
+        st.error(f"加载失败：{exc}")
+        return
+    _apply_builder(PlanBuilder.from_plan(scaled), message=message, warnings=warnings)
+
+
+def _save_profile_clicked(builder: PlanBuilder, raw_name: str) -> None:
+    name = (raw_name or "").strip()
+    if not name:
+        st.error("档案名不能为空。")
+        return
+    plan, errors = builder.try_build()
+    if plan is None or errors:
+        st.error("当前配置未通过校验，无法保存：")
+        for error in errors:
+            st.write(f"- {error}")
+        return
+    try:
+        path = save_profile(plan, PROFILES_DIR / profile_filename(name), name=name)
+    except (ConfigError, OSError) as exc:
+        st.error(f"保存失败：{exc}")
+        return
+    st.success(f"已保存：{path}")
+
+
+def _default_profile_name(builder: PlanBuilder) -> str:
+    if builder.plan_name and builder.plan_name != "capture-plan":
+        return builder.plan_name
+    return f"boss_{builder.screen.screenshot_height}p"
+
+
+def _render_profile_section(builder: PlanBuilder) -> None:
+    """配置档案区块：保存、加载、删除、下载、示例、上传导入。
+
+    放在 ``tab_config`` 的顶层（``regions`` 判空之前），这样「已截图但未框选」时也能加载档案。
+    """
+
+    with st.expander(
+        "配置档案（同一网页复用：保存 / 加载区域与配置）",
+        expanded=not builder.regions,
+    ):
+        st.caption(
+            "只保存区域字典、区域配置字典与输出映射，**不含**运行参数（引擎/大模型/份数）。"
+            f"保存目录：`{PROFILES_DIR}`；坐标与截图像素绑定，加载时会按比例换算并给出提示。"
+        )
+
+        col_name, col_save = st.columns([2, 1])
+        profile_name = col_name.text_input(
+            "档案名",
+            value=_default_profile_name(builder),
+            help="同名会覆盖；文件名会自动剔除 Windows 非法字符。",
+        )
+        if col_save.button("保存当前配置为档案", type="primary", key="profile_save"):
+            _save_profile_clicked(builder, profile_name)
+
+        profiles = list_profiles(PROFILES_DIR)
+        if not profiles:
+            st.caption("尚未保存任何档案。")
+        else:
+            labels = [path.stem for path in profiles]
+            selected = st.selectbox("选择已有档案", labels, key="profile_select")
+            selected_path = profiles[labels.index(selected)]
+            col_load, col_delete, col_download = st.columns([1, 1, 1])
+
+            if col_load.button("加载档案", key="profile_load"):
+                try:
+                    plan = load_profile(selected_path)
+                except ConfigError as exc:
+                    st.error(str(exc))
+                else:
+                    _load_plan_into_builder(
+                        plan, builder, message=f"已加载档案：{selected}"
+                    )
+
+            confirm_delete = st.checkbox(
+                "我确认删除选中的档案", key="profile_confirm_delete"
+            )
+            if col_delete.button("删除档案", key="profile_delete"):
+                if not confirm_delete:
+                    st.warning("请先勾选“我确认删除选中的档案”。")
+                else:
+                    try:
+                        selected_path.unlink()
+                    except OSError as exc:
+                        st.error(f"删除失败：{exc}")
+                    else:
+                        st.session_state["profile_pending_delete"] = selected
+                        st.rerun()
+
+            try:
+                payload = selected_path.read_bytes()
+            except OSError:
+                payload = b""
+            col_download.download_button(
+                "下载档案 JSON",
+                data=payload,
+                file_name=selected_path.name,
+                mime="application/json",
+                key="profile_download",
+            )
+
+        st.divider()
+        col_example, col_hint = st.columns([1, 2])
+        if col_example.button(
+            "加载示例配置（A 短信 / B、C 抄录）", key="profile_load_example"
+        ):
+            try:
+                example = load_plan(EXAMPLE_PLAN)
+            except ConfigError as exc:
+                st.error(f"加载示例失败：{exc}")
+            else:
+                _load_plan_into_builder(example, builder, message="已加载示例配置")
+        col_hint.caption("示例同样是跨分辨率换算后加载，不再直接覆盖区域坐标。")
+
+        uploaded = st.file_uploader(
+            "从文件导入（配置档案或运行计划）",
+            type=["json"],
+            key="profile_upload",
+            help="自动识别 kind=profile、含 run 的运行计划；两者都会按当前截图尺寸换算。",
+        )
+        if uploaded is not None and st.button("导入并加载", key="profile_upload_apply"):
+            try:
+                data = json.loads(uploaded.getvalue().decode("utf-8"))
+                plan = capture_plan_from_dict(data)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                st.error(f"文件不是合法 JSON：{exc}")
+            except ConfigError as exc:
+                st.error(str(exc))
+            else:
+                _load_plan_into_builder(
+                    plan, builder, message=f"已导入：{uploaded.name}"
+                )
 
 
 def _component_supports_drag() -> bool:
@@ -1228,31 +1459,23 @@ with tab_capture:
 # ② 区域配置
 # ---------------------------------------------------------------------- #
 with tab_config:
+    _consume_pending_profile_delete()
+    _render_builder_notice()
+
     builder = st.session_state.get("builder")
-    if builder is None or not builder.regions:
-        st.info("请先在“① 截图与框选”中框选区域。")
-    else:
+    if builder is not None:
+        # 档案块必须早于 regions 判空：已截图但未框选时，加载档案正是主要入口
+        _render_profile_section(builder)
+        builder = st.session_state.get("builder")
+
+    if builder is None:
+        st.info("请先在“① 截图与框选”中截取首屏；截取后即可在此加载配置档案或框选区域。")
+    elif builder.regions:
         st.subheader("区域工作模式与参数（NEWREADME 5.3.2）")
         st.caption(
             "坐标均为**原图像素**坐标；“滚动起始坐标”按原图坐标填写（与“① 测距模式”口径一致），"
             "运行时会按屏幕比例换算为鼠标坐标。"
         )
-        if st.button("加载示例配置（A 短信 / B、C 抄录）"):
-            sample = load_plan(EXAMPLE_PLAN)
-            loaded = PlanBuilder.from_plan(sample)
-            loaded.screen = builder.screen
-            loaded.regions = {
-                name: coords for name, coords in sample.regions.items()
-            }
-            loaded.configs = {
-                name: cfg.to_dict() for name, cfg in sample.region_configs.items()
-            }
-            loaded.title_region = sample.output.title_region
-            loaded.desc_region = sample.output.desc_region
-            st.session_state["builder"] = loaded
-            st.rerun()
-
-        builder = st.session_state["builder"]
         region_names = list(builder.regions)
         for name in region_names:
             cfg = builder.config(name)
@@ -1396,6 +1619,11 @@ with tab_config:
                     expected_content = st.text_input(
                         f"{name} 期望内容（语义提示，如“职位描述”）",
                         value=cfg.get("expected_content") or "",
+                        help=(
+                            "用于告诉大模型该区域是什么内容。若区域同时含岗位标签与描述，"
+                            "写“职位标签与职位描述”：提到“标签”才会启用标签聚类规则"
+                            "（合并为“标签：A、B、C”一行）。"
+                        ),
                     )
                     format_label = st.selectbox(
                         f"{name} 期望格式",
@@ -1463,6 +1691,9 @@ with tab_config:
             None if title_choice == "（未设置）" else title_choice,
             None if desc_choice == "（未设置）" else desc_choice,
         )
+
+    else:
+        st.info("尚未框选区域：可在上方加载配置档案，或回到“① 截图与框选”拖拽框选。")
 
 
 # ---------------------------------------------------------------------- #

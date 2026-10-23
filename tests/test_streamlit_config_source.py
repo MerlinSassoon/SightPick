@@ -123,19 +123,18 @@ def test_loading_example_config_yields_example_values(builder: PlanBuilder) -> N
     """复刻 UI 的“加载示例配置”：加载后 configs 必须就是文件内容。
 
     UI 侧只要如实展示 builder，就不会再出现“界面仍旧值”的问题。
+    注意：这里必须走 ``rescale_plan`` + ``from_plan``——历史实现直接把
+    ``sample.regions``（``Region`` 对象）赋给 ``builder.regions``，导致加载后无法 build。
     """
 
     from recruiting_capture.models.plan_io import load_plan
+    from recruiting_capture.models.profile_io import rescale_plan
 
     root = __import__("pathlib").Path(__file__).resolve().parents[1]
     sample = load_plan(root / "configs" / "boss_1080p_example.json")
 
-    loaded = PlanBuilder.from_plan(sample)
-    loaded.screen = builder.screen
-    loaded.regions = dict(sample.regions)
-    loaded.configs = {name: cfg.to_dict() for name, cfg in sample.region_configs.items()}
-    loaded.title_region = sample.output.title_region
-    loaded.desc_region = sample.output.desc_region
+    scaled, _ = rescale_plan(sample, builder.screen)
+    loaded = PlanBuilder.from_plan(scaled)
 
     cfg_a = loaded.config("A")
     assert cfg_a["mode"] == MODE_SMS
@@ -145,3 +144,21 @@ def test_loading_example_config_yields_example_values(builder: PlanBuilder) -> N
     assert loaded.desc_region == "B"
     assert loaded.config("B")["scrollable"] is True
     assert loaded.config("C")["scrollable"] is False
+
+
+def test_example_config_loads_into_buildable_builder(builder: PlanBuilder) -> None:
+    """回归：加载示例后必须还能 build（曾因塞入 Region 对象而失败）。"""
+
+    from recruiting_capture.models.plan_io import load_plan
+    from recruiting_capture.models.profile_io import rescale_plan
+
+    root = __import__("pathlib").Path(__file__).resolve().parents[1]
+    sample = load_plan(root / "configs" / "boss_1080p_example.json")
+
+    scaled, warnings = rescale_plan(sample, builder.screen)
+    loaded = PlanBuilder.from_plan(scaled)
+    plan = loaded.build()
+
+    assert warnings == []  # 同为 1920×1080，无需换算
+    assert plan.regions["A"].as_list() == [212, 300, 620, 930]
+    assert plan.region_configs["A"].invoke_regions == EXAMPLE_INVOKE_ORDER

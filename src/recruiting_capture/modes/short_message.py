@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
 
 from ..errors import ConfigError, LLMError, RecruitingError
 from ..models.config import DATA_STRUCTURE_DICT, OutputConfig, SmsConfig
@@ -20,6 +21,9 @@ from ..text_utils import (
 from ..ocr.engine import OcrLine
 from .base import BaseRegionMode, ModeContext
 from .transcribe import TranscribeMode
+
+if TYPE_CHECKING:  # 仅用于类型注解：worker 依赖 modes.denoise_ops，运行期导入会成环
+    from ..llm.worker import LLMWorker
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +98,33 @@ class ShortMessageMode(BaseRegionMode):
         if limit is None:
             limit = 10**9
 
+        worker = self._make_worker()
+        ok = False
+        try:
+            # 屏障必须在返回前完成：占位符一旦外泄，to_records 会把 job_desc 变成空列表
+            self._collect(limit, worker)
+            self._resolve_all_pending()
+            self._assign_titles()
+            result = self._assemble()
+            ok = True
+            return result
+        finally:
+            if worker is not None:
+                abandoned = worker.close(
+                    drain=ok,
+                    timeout=float(getattr(self.ctx.run, "llm_drain_timeout_seconds", 30)),
+                )
+                self.ctx.stats["llm_calls_async"] = (
+                    self.ctx.stats.get("llm_calls_async", 0) + worker.total_calls
+                )
+                if abandoned:
+                    self.warnings.append(
+                        f"{len(abandoned)} 个异步去噪未完成，已按规则兜底"
+                    )
+
+    def _collect(self, limit: int, worker: "LLMWorker | None" = None) -> None:
+        """点击/滚动/截图/OCR 主循环（原 workflow 的循环体）。"""
+
         frame, lines = self.analyze()
         round_index = 1
         while self._processed < limit and round_index <= self.config.max_rounds:
@@ -130,7 +161,7 @@ class ShortMessageMode(BaseRegionMode):
                 frame, lines = self.analyze()
                 continue
 
-            item = self._invoke_transcribe_modes()
+            item = self._invoke_transcribe_modes(worker)
             self.items.append(item)
             self._processed += 1
             self.warnings.extend(item.warnings)
@@ -168,7 +199,63 @@ class ShortMessageMode(BaseRegionMode):
             self.stop_reason,
             self._processed,
         )
-        return self._assemble()
+
+    # ------------------------------------------------------------------ #
+    # 异步屏障（唯一等待点）
+    # ------------------------------------------------------------------ #
+    def _make_worker(self) -> "LLMWorker | None":
+        if not getattr(self.ctx.run, "llm_async", True):
+            return None
+        factory = getattr(self.ctx, "llm_factory", None)
+        if factory is None:
+            return None  # 降级为同步，不报错
+        from ..llm.worker import LLMWorker  # 延迟导入：避免 modes ↔ llm.worker 循环导入
+
+        return LLMWorker(
+            factory(),  # 独立客户端，独立 Session
+            threads=int(getattr(self.ctx.run, "llm_worker_threads", 2)),
+            queue_max=int(getattr(self.ctx.run, "llm_queue_max", 8)),
+            task_retries=int(getattr(self.ctx.run, "llm_task_retries", 1)),
+        )
+
+    def _resolve_all_pending(self) -> None:
+        """唯一屏障：按 items / invoke_regions 顺序结算占位符。"""
+
+        from ..llm.worker import PendingText, _UNRESOLVED
+        from .denoise_ops import rule_based_result
+
+        budget = float(getattr(self.ctx.run, "llm_task_timeout_seconds", 90))
+        started = time.monotonic()
+        for item in self.items:
+            for name in self.config.invoke_regions:
+                handle = item.values.get(name)
+                if not isinstance(handle, PendingText):
+                    continue
+                value, warnings = handle.resolve(budget)
+                if value is _UNRESOLVED:
+                    value = rule_based_result(
+                        handle.payload,
+                        self.transcribe_modes[name].config.expected_format,
+                    )
+                item.values[name] = value
+                item.ordered_results = [
+                    item.values[n] for n in self.config.invoke_regions
+                ]
+                for warning in warnings:
+                    message = f"区域 {name}: {warning}"
+                    item.warnings.append(message)
+                    self.warnings.append(message)
+        self.ctx.stats["llm_wait_ms"] = int((time.monotonic() - started) * 1000)
+
+    def _assign_titles(self) -> None:
+        """解析完成后再做键（异步下占位符不可哈希）。"""
+
+        if self.config.data_structure != DATA_STRUCTURE_DICT or not self.key_region:
+            return
+        for item in self.items:
+            title, extra = self._normalize_key(item.values.get(self.key_region))
+            item.title = title
+            item.warnings.extend(extra)
 
     # ------------------------------------------------------------------ #
     # 点击（6.2 函数四 + 8.2.3 可选确认/回滚）
@@ -244,23 +331,22 @@ class ShortMessageMode(BaseRegionMode):
     # ------------------------------------------------------------------ #
     # 调用抄录模式（6.2 函数六 / 5.3.3）
     # ------------------------------------------------------------------ #
-    def _invoke_transcribe_modes(self) -> SmsItem:
+    def _invoke_transcribe_modes(
+        self, worker: "LLMWorker | None" = None
+    ) -> SmsItem:
         values: dict[str, Any] = {}
         ordered: list[Any] = []
         warnings: list[str] = []
         for name in self.config.invoke_regions:
             mode = self.transcribe_modes[name]
             logger.info("短信区域 %s 调用抄录区域 %s", self.region_name, name)
-            result = mode.workflow()
+            result = mode.workflow(worker)
             values[name] = result
             ordered.append(result)
             warnings.extend(f"区域 {name}: {warning}" for warning in mode.warnings)
 
-        title: str | None = None
-        if self.config.data_structure == DATA_STRUCTURE_DICT and self.key_region:
-            title, key_warnings = self._normalize_key(values.get(self.key_region))
-            warnings.extend(key_warnings)
-        return SmsItem(values=values, ordered_results=ordered, title=title, warnings=warnings)
+        # 做键延后到 _assign_titles：异步路径下 values 里此刻是 PendingText
+        return SmsItem(values=values, ordered_results=ordered, title=None, warnings=warnings)
 
     @staticmethod
     def _normalize_key(value: Any) -> tuple[str, list[str]]:

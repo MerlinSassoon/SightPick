@@ -31,6 +31,8 @@ class ModeContext:
     sleep: Callable[[float], None] = time.sleep
     screenshots_dir: Path | None = None
     save_screenshots: bool = False
+    # 异步去噪用的独立客户端工厂（None = 降级为同步，与改造前完全等价）
+    llm_factory: Callable[[], LLMClient] | None = None
     stats: dict[str, int] = field(
         default_factory=lambda: {
             "screenshots": 0,

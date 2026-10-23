@@ -95,6 +95,7 @@ class DenoiseTask:
     region: str
     attempts: int
     handle: PendingText = field(compare=False)
+    context: dict[str, Any] = field(default_factory=dict)
 
 
 class LLMWorker:
@@ -154,6 +155,7 @@ class LLMWorker:
             region=region,
             attempts=self._task_retries + 1,
             handle=handle,
+            context={"region": region},
         )
         while True:
             if self._closing.is_set():
@@ -195,23 +197,30 @@ class LLMWorker:
         for attempt in range(1, task.attempts + 1):
             with self._lock:
                 self.total_calls += 1
+            # 每次尝试都清空上一轮的降级结果：重试成功后不得沿用旧值
+            warnings: list[str] = []
+            value: Any = None
             try:
-                raw = self._client.denoise(
-                    texts=task.texts,
-                    frame=task.frame,
-                    expected_content=task.expected_content,
-                    expected_format=task.expected_format,
-                    context={"region": task.region},
+                value = apply_expected_format(
+                    self._client.denoise(
+                        texts=task.texts,
+                        frame=task.frame,
+                        expected_content=task.expected_content,
+                        expected_format=task.expected_format,
+                        context=dict(task.context),
+                    ),
+                    task.texts,
+                    task.expected_format,
                 )
             except NonRetryableLLMError as exc:
                 # 重试也必然失败：立即按 R6 降级，不再消耗剩余次数（C-4）
-                task.handle.fulfill(
-                    rule_based_result(task.texts, task.expected_format),
-                    [f"去噪调用大模型失败，按 R6 降级为规则清理：{exc}"],
-                )
+                value = rule_based_result(task.texts, task.expected_format)
+                warnings = [f"去噪调用大模型失败，按 R6 降级为规则清理：{exc}"]
+                task.handle.fulfill(value, warnings)
                 return
             except LLMError as exc:
-                warning = f"去噪调用大模型失败，按 R6 降级为规则清理：{exc}"
+                value = rule_based_result(task.texts, task.expected_format)
+                warnings = [f"去噪调用大模型失败，按 R6 降级为规则清理：{exc}"]
                 if attempt < task.attempts:
                     logger.warning(
                         "区域 %s 去噪失败（第 %d/%d 次），%.1fs 后重试",
@@ -222,13 +231,9 @@ class LLMWorker:
                     )
                     self._sleep(self._retry_wait)
                     continue
-                task.handle.fulfill(
-                    rule_based_result(task.texts, task.expected_format), [warning]
-                )
+                task.handle.fulfill(value, warnings)
                 return
-            task.handle.fulfill(
-                apply_expected_format(raw, task.texts, task.expected_format), []
-            )
+            task.handle.fulfill(value, warnings)
             return
 
     # ------------------------------------------------------------------ #

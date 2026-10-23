@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING, Any
 
 from ..capture.driver import Frame
 from ..errors import AnchorNotFoundError, LLMError
@@ -16,6 +17,9 @@ from ..text_utils import (
 )
 from .base import BaseRegionMode, ModeContext
 from .denoise_ops import apply_expected_format, denoise_once, rule_based_result
+
+if TYPE_CHECKING:  # 仅用于类型注解，避免与 llm.worker 形成运行期循环导入
+    from ..llm.worker import LLMWorker
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +38,9 @@ class TranscribeMode(BaseRegionMode):
     # ------------------------------------------------------------------ #
     # 工作流程（6.3 函数八）
     # ------------------------------------------------------------------ #
-    def workflow(self) -> str | list[str] | tuple[str, ...]:
+    def workflow(
+        self, worker: "LLMWorker | None" = None
+    ) -> str | list[str] | tuple[str, ...]:
         self.stop_marker = None
         self.rounds_used = 0
         self.warnings = []
@@ -42,17 +48,21 @@ class TranscribeMode(BaseRegionMode):
         self._scroll_distance_override = None
 
         if not self.config.scrollable:
-            return self._run_single()
-        return self._run_scrollable()
+            return self._run_single(worker)
+        return self._run_scrollable(worker)
 
-    def _run_single(self) -> str | list[str] | tuple[str, ...]:
+    def _run_single(
+        self, worker: "LLMWorker | None" = None
+    ) -> str | list[str] | tuple[str, ...]:
         frame, lines = self.analyze()
         self.rounds_used = 1
         if self._effective_anchor:
             self._ensure_anchor(frame, lines)
-        return self._denoise([line.text for line in lines], frame)
+        return self._denoise([line.text for line in lines], frame, worker)
 
-    def _run_scrollable(self) -> str | list[str] | tuple[str, ...]:
+    def _run_scrollable(
+        self, worker: "LLMWorker | None" = None
+    ) -> str | list[str] | tuple[str, ...]:
         collected: list[str] = []
         seen: set[str] = set()
         stale_rounds = 0
@@ -118,7 +128,7 @@ class TranscribeMode(BaseRegionMode):
             self.rounds_used,
             len(collected),
         )
-        return self._denoise(dedupe_lines(collected), last_frame)
+        return self._denoise(dedupe_lines(collected), last_frame, worker)
 
     # ------------------------------------------------------------------ #
     # 首轮锚点确认（8.3.2 / 6.5.3）
@@ -199,22 +209,34 @@ class TranscribeMode(BaseRegionMode):
     # 结果去噪（6.3 函数八点零）
     # ------------------------------------------------------------------ #
     def _denoise(
-        self, texts: list[str], frame: Frame | None
-    ) -> str | list[str] | tuple[str, ...]:
+        self,
+        texts: list[str],
+        frame: Frame | None,
+        worker: "LLMWorker | None" = None,
+    ) -> str | list[str] | tuple[str, ...] | Any:
         payload = dedupe_lines(texts)
-        result, warnings = denoise_once(
-            self.ctx.llm,
+        if worker is None:  # 同步路径：测试与单区域直接调用
+            result, warnings = denoise_once(
+                self.ctx.llm,
+                texts=payload,
+                frame=frame,
+                expected_content=self.config.expected_content,
+                expected_format=self.config.expected_format,
+                context={"region": self.region_name},
+            )
+            for warning in warnings:
+                message = f"区域 {self.region_name} {warning}"
+                self.warnings.append(message)
+                logger.warning(message)
+            return result
+        # O-1：抄录模式一律只发初步分析文本，不区分期望格式
+        return worker.submit(
             texts=payload,
-            frame=frame,
+            frame=None,
             expected_content=self.config.expected_content,
             expected_format=self.config.expected_format,
-            context={"region": self.region_name},
+            region=self.region_name,
         )
-        for warning in warnings:
-            message = f"区域 {self.region_name} {warning}"
-            self.warnings.append(message)
-            logger.warning(message)
-        return result
 
     def _rule_based_result(
         self, texts: list[str]

@@ -32,6 +32,9 @@ LLM_OPTIONS = ("deepseek", "mock")
 ON_JOB_ERROR = ("abort", "skip")
 ON_SCREEN_CHANGE = ("abort", "warn")
 
+# 已移除的抄录配置键：历史上从未被任何代码读取，加载旧计划时直接丢弃
+_DEPRECATED_TRANSCRIBE_KEYS = ("denoise_per_round",)
+
 
 def _require_mapping(value: Any, field_name: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
@@ -125,7 +128,6 @@ class TranscribeConfig:
     anchor_key: str | None = None
     max_rounds: int = 12
     max_stale_rounds: int = 2
-    denoise_per_round: bool = False
     auto_adjust_scroll: bool = False
 
     FIELDS = (
@@ -140,13 +142,16 @@ class TranscribeConfig:
         "anchor_key",
         "max_rounds",
         "max_stale_rounds",
-        "denoise_per_round",
         "auto_adjust_scroll",
     )
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "TranscribeConfig":
         data = _require_mapping(data, "抄录模式配置")
+        if any(key in data for key in _DEPRECATED_TRANSCRIBE_KEYS):
+            data = dict(data)  # 不改调用方对象
+            for key in _DEPRECATED_TRANSCRIBE_KEYS:
+                data.pop(key, None)
         _unknown_keys(data, cls.FIELDS, "抄录模式配置")
         mode = _as_enum(data.get("mode", MODE_TRANSCRIBE), MODES, "mode")
         if mode != MODE_TRANSCRIBE:
@@ -177,9 +182,6 @@ class TranscribeConfig:
             max_rounds=_as_int(data.get("max_rounds", 12), "max_rounds", minimum=1),
             max_stale_rounds=_as_int(
                 data.get("max_stale_rounds", 2), "max_stale_rounds", minimum=0
-            ),
-            denoise_per_round=_as_bool(
-                data.get("denoise_per_round", False), "denoise_per_round"
             ),
             auto_adjust_scroll=_as_bool(
                 data.get("auto_adjust_scroll", False), "auto_adjust_scroll"
@@ -214,7 +216,6 @@ class TranscribeConfig:
             "anchor_key": self.anchor_key,
             "max_rounds": self.max_rounds,
             "max_stale_rounds": self.max_stale_rounds,
-            "denoise_per_round": self.denoise_per_round,
             "auto_adjust_scroll": self.auto_adjust_scroll,
         }
 

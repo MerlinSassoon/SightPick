@@ -94,11 +94,30 @@ VibeCoding_Project/
 └─ requirements*.txt
 ```
 
+## 大模型异步执行（IRDV-RF-001）
+
+抄录模式的去噪调用不再阻塞主线程：`TranscribeMode` 把任务提交到后台线程池并立即返回占位符，
+`ShortMessageMode.workflow()` 在汇总前设**唯一屏障**按 `items` / `invoke_regions` 顺序结算，
+因此 `raw/sms_*.json`、`jobs.jsonl`、`to_records` 与前端均为零改动。
+
+| 配置项（`run` 段） | 默认 | 说明 |
+| --- | --- | --- |
+| `llm_async` | `true` | 总开关；`false` = 完全同步（回滚路径，结果与异步一致） |
+| `llm_worker_threads` | `2` | 后台线程数 |
+| `llm_queue_max` | `8` | 有界队列上界（满则阻塞 submit，形成背压） |
+| `llm_task_retries` | `1` | 外层重试次数；配合 `llm_max_retries`（底层 1 次） |
+| `llm_task_timeout_seconds` | `90` | 主线程单句柄等待预算，超时按 R6 规则兜底 |
+| `llm_drain_timeout_seconds` | `30` | `close(drain=True)` 的收尾预算 |
+
+`capture_report.json` 中 `llm_calls` 为总数，并另记 `llm_calls_sync` / `llm_calls_async` / `llm_wait_ms` / `llm_async`。
+`verify_click` 与 `confirm_anchor` **仍是同步调用**：二者属于控制流，异步化会破坏异常语义。
+
 ## 验证现状
 
 本机（开发环境）已完成：
 
-- `python -m pytest -q` → **120 passed, 1 skipped**
+- `python -m pytest -q` → **148 passed, 1 skipped**（异步重构后；重构前基线为 131 passed, 1 skipped）
+- 新增测试：`tests/test_llm_worker.py`（W1–W7 并发语义）、`tests/test_modes_async.py`（A1/A3/A4/A5）、`test_orchestrator_demo.py::test_async_matches_sync_byte_for_byte`（A2 对拍）
 - 前端冒烟：用最小 Streamlit 替身执行 `app/streamlit_app.py`，覆盖“载入示例截图 → 缩放展示 → 框选坐标还原”“倒计时模式不碰窗口”“最小化只作用于定位到的窗口”三类场景
 - 窗口定位只读验证：`python scripts/window_diag.py`（当前环境无 Streamlit 窗口时返回 None，不会回退最小化其它窗口）
 - `python -m pytest -q tests/test_real_ocr_smoke.py`（`RUN_REAL_OCR=1`）→ **1 passed**（真实 PaddleOCR 对静态截图识别，不移动鼠标）

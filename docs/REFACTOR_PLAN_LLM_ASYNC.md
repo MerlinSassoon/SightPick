@@ -1113,12 +1113,12 @@ python run.py validate --plan runtime/plans/plan_20261023-025625.json
 
 | 步骤 | 完成时间 | 测试结果 | 与预期偏差 | 备注 |
 | --- | --- | --- | --- | --- |
-| 基线 | | | | |
-| P0 | | | | |
-| P1 | | | | |
-| P2 | | | | |
-| P3 | | | | |
-| P4 | | | | |
+| 基线 | 2026-10-23 13:10 | 131 passed, 1 skipped | **文档写 120 passed，实测 131** | 120 是测试函数数，参数化展开后收集为 131；git 工作区干净（HEAD `8f76517`）。按 §0.4 本应停下报告，经批准以 131 为基线继续 |
+| P0 | 2026-10-23 13:12 | 131 passed, 1 skipped | 无 | `commit 620ccee`。diff 仅 4 个文件；`denoise_per_round` 计数不变。**外加改动**：`denoise_once` 增加 `context` 参数并透传，否则异步路径丢失 `{"region": ...}` 上下文（同步/异步结果会不一致） |
+| P1 | 2026-10-23 13:15 | 141 passed, 1 skipped | 无 | `commit 3ed6371`。W1–W7 + 3 个补充用例全通过；`import threading` 仅命中 `llm/worker.py`。**参考实现的缺陷已修正**：①`submit` 在 `queue.Full` 中 `put` 可能成功重试，`_closing` 永不生效 → 改为每轮先检查 `_closing`；②`denoise_once` 吞掉异常类型，无法区分 `NonRetryableLLMError`（W4 要求只调 1 次）→ `_execute` 直接调 `llm.denoise` 并按异常类型分支 |
+| P2 | 2026-10-23 13:22 | 147 passed, 1 skipped | 无 | `commit bb9f715`。`test_modes.py` 零改动；A1/A3/A4/A5 通过；手动对拍 `raw/sms_A.json` 与 `factory=None/非 None` 两种运行一致。**发现的真实缺陷**：worker 重试时沿用上一轮的空降级结果，导致"重试成功后描述为空"——已在 P2 修复并加回归用例 `test_retried_denoise_does_not_lose_content`。**O-1 落地**：`frame` 恒为 `None` |
+| P3 | 2026-10-23 13:23 | 148 passed, 1 skipped | A2 需剔除 `captured_at` | `commit dc31aab`。`run.py validate`（两个计划）通过；`run.py demo` 3 岗位 / `list_end`；报告 `llm_calls=6, sync=0, async=6, llm_wait_ms=0, llm_async=true`。`ModeContext.llm_factory` 属 §7 清单漏列，实际必改 |
+| P4 | 2026-10-23 13:25 | 148 passed, 1 skipped | `_DEPRECATED_KEYS` 实际命名为 `_DEPRECATED_TRANSCRIBE_KEYS` | 验收 `grep denoise_per_round src app configs` 仅命中 `config.py` 定义处；旧存档 `plan_20261023-025625.json` 校验通过；前端冒烟 9 passed；`compileall` 通过 |
 
 ---
 
@@ -1126,7 +1126,7 @@ python run.py validate --plan runtime/plans/plan_20261023-025625.json
 
 | 编号 | 事项 | 当前状态                                            |
 | --- | --- |-------------------------------------------------|
-| O-1 | `send_frame` 按 `expected_format == "str"` 判定（P2.3(b)） | **用户意见**：抄录模式下不区分期望格式是str还是list，一律只发送初步分析文本给大模型 |
+| O-1 | `send_frame` 按 `expected_format == "str"` 判定（P2.3(b)） | **已定稿并落地**：抄录模式下不区分期望格式是str还是list，一律只发送初步分析文本给大模型。P2 中 `frame` 恒为 `None`，见 AMBIGUITIES D24 |
 | O-2 | `on_item` 逐项落盘（方案 B） | **用户意见**：本次不做                                   |
 | O-3 | D13 表述与实际落盘粒度不一致（`docs/AMBIGUITIES.md` 第 21 行写“每条岗位立即落盘”，实际是 sms 级） | **用户意见**：本次不动代码                                 |
 | O-4 | `llm_worker_threads` 在真实 DeepSeek 上的实测收益 | **用户意见**： P3 之后用一次真实采集验证（需 API Key），AI无需考虑      |

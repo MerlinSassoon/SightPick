@@ -40,7 +40,6 @@
       "anchor_key": "职位描述",
       "max_rounds": 12,
       "max_stale_rounds": 2,
-      "denoise_per_round": false,
       "auto_adjust_scroll": false
     },
     "C": {

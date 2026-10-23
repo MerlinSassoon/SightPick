@@ -1400,11 +1400,6 @@ with tab_config:
                         min_value=1,
                         key=f"trounds_{name}",
                     )
-                    denoise_per_round = st.checkbox(
-                        "每轮都调用大模型去噪（更贵，默认关闭）",
-                        value=bool(cfg.get("denoise_per_round")),
-                        key=f"denoise_{name}",
-                    )
                     auto_adjust = st.checkbox(
                         "锚点修正后自动应用建议滚动距离（默认关闭）",
                         value=bool(cfg.get("auto_adjust_scroll")),
@@ -1425,7 +1420,6 @@ with tab_config:
                             "expected_format": expected_format,
                             "anchor_key": anchor_key.strip() or None,
                             "max_rounds": int(max_rounds),
-                            "denoise_per_round": denoise_per_round,
                             "auto_adjust_scroll": auto_adjust,
                         },
                     )

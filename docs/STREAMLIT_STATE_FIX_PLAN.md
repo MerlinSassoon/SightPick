@@ -379,4 +379,72 @@ Streamlit AppTest（加载示例配置）          0 exception / 0 duplication w
 AppTest 属临时校验脚本（`_verify_apptest.py` / `_verify_apptest2.py`），验证后已删除，未入库。
 如需纳入 CI，建议后续以 `streamlit.testing.v1.AppTest` 正式落为测试用例。
 
+---
+
+## 十、回归修复：label 被隐藏导致“前端看不到该填什么”（2026-10-23）
+
+### 10.1 现象
+
+第二步交付后，人眼验收发现配置页出现一排**没有任何说明的输入框**：
+
+| 界面显示 | 实为哪个字段 |
+| --- | --- |
+| `-350` | 滚动距离（负值向下） |
+| `738, 526` | 滚动起始坐标 [x, y] |
+| `去App` | 滚动停止条件（多个用逗号分隔） |
+| `职位描述` | 期望内容（语义提示，如“职位描述”） |
+| `12` | 最大滚动轮次 |
+
+而同一页面里的 `C 停止条件匹配方式`、`C 期望格式`、`C 该区域可滚动` 却有文字。
+
+### 10.2 排查
+
+对截图逐项比对，规律立刻显现：**有文字的都是没加 `label_visibility` 的控件，
+没文字的都加了**。统计代码共 **18 处** `label_visibility="collapsed"`：
+
+| 位置 | 数量 |
+| --- | --- |
+| 区域坐标 `xmin/ymin/xmax/ymax` | 4 |
+| 配置页短信模式 | 8 |
+| 配置页抄录模式 | 6 |
+
+### 10.3 根因
+
+第二步为避免 9.2 的 `StreamlitDuplicateElementId`，做了两件事：
+
+1. 给循环内控件的 label 加区域名前缀（`f"{name} 滚动距离"`）→ **解决了 ID 冲突**；
+2. 同时加 `label_visibility="collapsed"`，想让界面保持“原来那样干净”。
+
+**第 2 步是完全多余的，而且有害。** 前缀本身已保证 ID 唯一，隐藏 label 的唯一效果
+是抹掉了用户能看到的唯一字段说明。这是设计判断失误，不是 Streamlit 的问题。
+
+### 10.4 修复
+
+- 删除全部 18 处 `label_visibility="collapsed"`；
+- 保留带区域名前缀的可见 label，界面显示为 `C 滚动距离（负值向下）`；
+- “工作模式”单选框同样恢复显示 `C 工作模式`；
+- 区域坐标行原本靠 `### A` 区分，恢复后显示 `A xmin` 等短 label，信息更完整。
+
+### 10.5 防线补强
+
+`test_streamlit_widget_policy.py` 新增：
+
+- `test_widget_labels_must_not_be_hidden`：任何控件的 `label_visibility` 都不得为
+  `collapsed` / `hidden`，否则报错并列出具体行号与 label。
+
+这条约束与 `test_widget_labels_inside_loops_must_be_dynamic` 互为补角：
+**label 必须唯一（靠前缀），但必须可见（不许隐藏）。**
+
+### 10.6 验证
+
+```
+静态防线                                 6 passed
+全量 pytest                              162 passed, 1 skipped, 0 failed
+Streamlit AppTest（加载示例配置）          51 个控件
+   hidden labels: 0
+   empty labels:  0
+   exceptions:    0
+```
+
+
 

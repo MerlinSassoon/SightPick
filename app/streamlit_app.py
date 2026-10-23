@@ -1191,16 +1191,16 @@ with tab_capture:
                 cols[0].markdown(f"### {name}")
                 new_values = [
                     cols[1].number_input(
-                        f"{name} xmin", value=int(coords[0]), min_value=0, label_visibility="collapsed"
+                        f"{name} xmin", value=int(coords[0]), min_value=0
                     ),
                     cols[2].number_input(
-                        f"{name} ymin", value=int(coords[1]), min_value=0, label_visibility="collapsed"
+                        f"{name} ymin", value=int(coords[1]), min_value=0
                     ),
                     cols[3].number_input(
-                        f"{name} xmax", value=int(coords[2]), min_value=0, label_visibility="collapsed"
+                        f"{name} xmax", value=int(coords[2]), min_value=0
                     ),
                     cols[4].number_input(
-                        f"{name} ymax", value=int(coords[3]), min_value=0, label_visibility="collapsed"
+                        f"{name} ymax", value=int(coords[3]), min_value=0
                     ),
                 ]
                 mode = builder.configs[name].get("mode")
@@ -1263,13 +1263,12 @@ with tab_config:
             ):
                 # 无 key 时，控件元素 ID 由 label 等参数决定；同一循环里重复的 label
                 # 会触发 StreamlitDuplicateElementId。故所有 label 统一带区域名，
-                # 既保持界面可读，又保证每个区域的控件 ID 唯一。
+                # 既保证控件 ID 唯一，又让用户在界面上看到每个字段的含义。
                 mode_label = st.radio(
                     f"{name} 工作模式",
                     ["短信模式", "抄录模式"],
                     index=0 if mode == MODE_SMS else 1,
                     horizontal=True,
-                    label_visibility="collapsed",
                 )
                 desired_mode = MODE_SMS if mode_label == "短信模式" else MODE_TRANSCRIBE
                 if desired_mode != mode:
@@ -1281,17 +1280,14 @@ with tab_config:
                         f"{name} 滚动距离（负值向下）",
                         value=int(cfg.get("scroll_distance") or -180),
                         step=10,
-                        label_visibility="collapsed",
                     )
                     start_text = st.text_input(
                         f"{name} 滚动起始坐标 [x, y]",
                         value=_point_text(cfg.get("scroll_start")),
-                        label_visibility="collapsed",
                     )
                     markers = st.text_input(
                         f"{name} 滚动停止条件（多个用逗号分隔）",
                         value="、".join(cfg.get("scroll_stop_markers") or []),
-                        label_visibility="collapsed",
                     )
                     stop_match = st.selectbox(
                         f"{name} 停止条件匹配方式",
@@ -1328,7 +1324,6 @@ with tab_config:
                         value=int(cfg.get("max_items") or 0),
                         min_value=0,
                         step=1,
-                        label_visibility="collapsed",
                     )
                     verify_click = st.checkbox(
                         f"{name} 点击后由视觉大模型确认命中（默认关闭，见 D2）",
@@ -1339,19 +1334,16 @@ with tab_config:
                         f"{name} 回滚步长",
                         value=int(cfg.get("rollback_step", 50)),
                         min_value=1,
-                        label_visibility="collapsed",
                     )
                     max_click_retries = col_b.number_input(
                         f"{name} 最大点击重试次数",
                         value=int(cfg.get("max_click_retries", 3)),
                         min_value=1,
-                        label_visibility="collapsed",
                     )
                     max_rounds = st.number_input(
                         f"{name} 最大循环轮次（安全阀）",
                         value=int(cfg.get("max_rounds", 30)),
                         min_value=1,
-                        label_visibility="collapsed",
                     )
                     start_point = _parse_point(start_text)
                     if start_text.strip() and start_point is None:
@@ -1387,17 +1379,14 @@ with tab_config:
                             f"{name} 滚动距离（负值向下）",
                             value=int(cfg.get("scroll_distance") or -180),
                             step=10,
-                            label_visibility="collapsed",
                         )
                         start_text = st.text_input(
                             f"{name} 滚动起始坐标 [x, y]",
                             value=_point_text(cfg.get("scroll_start")),
-                            label_visibility="collapsed",
                         )
                         markers_text = st.text_input(
                             f"{name} 滚动停止条件（多个用逗号分隔）",
                             value="、".join(cfg.get("scroll_stop_markers") or []),
-                            label_visibility="collapsed",
                         )
                         stop_match = st.selectbox(
                             f"{name} 停止条件匹配方式",
@@ -1407,7 +1396,6 @@ with tab_config:
                     expected_content = st.text_input(
                         f"{name} 期望内容（语义提示，如“职位描述”）",
                         value=cfg.get("expected_content") or "",
-                        label_visibility="collapsed",
                     )
                     format_label = st.selectbox(
                         f"{name} 期望格式",
@@ -1421,13 +1409,11 @@ with tab_config:
                         f"{name} 首轮锚点关键字（可留空）",
                         value=cfg.get("anchor_key") or "",
                         help="例如职位描述区域填“职位描述”；首轮找不到时由视觉大模型确认（8.3.2）。",
-                        label_visibility="collapsed",
                     )
                     max_rounds = st.number_input(
                         f"{name} 最大滚动轮次",
                         value=int(cfg.get("max_rounds", 12)),
                         min_value=1,
-                        label_visibility="collapsed",
                     )
                     auto_adjust = st.checkbox(
                         f"{name} 锚点修正后自动应用建议滚动距离（默认关闭）",

@@ -229,6 +229,32 @@ def test_widget_labels_inside_loops_must_be_dynamic(widgets: list[_WidgetCall]) 
         )
 
 
+def test_widget_labels_must_not_be_hidden(widgets: list[_WidgetCall]) -> None:
+    """控件的 label 不得被隐藏：它是用户唯一能看到的字段说明。
+
+    曾为“规避循环内 label 重复”而给控件加 ``label_visibility="collapsed"``，
+    结果去 key 改造后界面上只剩一排没有任何说明的输入框，用户不知道该填什么。
+    既然循环内的 label 已带上区域名前缀（见上一条测试），ID 不会冲突，
+    就没有任何理由隐藏 label——这里把该约定锁死。
+    """
+
+    offenders = []
+    for widget in widgets:
+        expr = widget.keyword_args.get("label_visibility")
+        if isinstance(expr, ast.Constant) and expr.value in ("collapsed", "hidden"):
+            offenders.append(
+                f"  app/streamlit_app.py:{widget.lineno}  st.{widget.name}("
+                f"label={widget.label!r}, label_visibility={expr.value!r})"
+            )
+    if offenders:
+        pytest.fail(
+            "以下控件的 label 被隐藏，用户将看不到该填什么：\n"
+            + "\n".join(offenders)
+            + "\n请删除 label_visibility，改用带区域名前缀的可见 label。",
+            pytrace=False,
+        )
+
+
 def test_widget_keys_are_unique(widgets: list[_WidgetCall]) -> None:
     """重复的 key 会让两个控件共用同一份状态，后渲染者覆盖前者。"""
 

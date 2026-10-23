@@ -35,7 +35,16 @@ class ScreenChangedError(RecruitingError):
 
 
 class AutomationAbortedError(RecruitingError):
-    """用户触发急停或 pyautogui 失效保护。"""
+    """自动化无法继续：急停、pyautogui 失效保护，或输入注入被系统拒绝。"""
+
+
+class InputInjectionError(AutomationAbortedError):
+    """当前解释器/进程无法向桌面注入鼠标或键盘输入。
+
+    Windows 上 ``SetCursorPos``/``mouse_event`` 在缺少输入注入权限时**返回失败但不抛异常**，
+    调用方若不校验返回值就会“日志一切正常、鼠标纹丝不动”。本异常用于把这种
+    静默失败显式暴露出来。
+    """
 
 
 class StopRequested(RecruitingError):

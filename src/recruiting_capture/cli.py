@@ -148,16 +148,40 @@ def cmd_demo(args: argparse.Namespace) -> int:
 
 
 def cmd_scroll_test(args: argparse.Namespace) -> int:
+    from .capture.input_check import describe_input_environment, ensure_input_injection
+    from .errors import InputInjectionError
+
     try:
         import pyautogui
     except Exception as exc:  # pragma: no cover
         print(f"[失败] 无法导入 pyautogui：{exc}", file=sys.stderr)
         return 1
     pyautogui.FAILSAFE = True
+
+    # 先自检：输入注入被系统拒绝时 SetCursorPos 静默失败，
+    # 若不提前校验，就会“每次都打印滚动成功、鼠标纹丝不动”。
+    try:
+        ensure_input_injection()
+    except InputInjectionError as exc:
+        print(f"[失败] 鼠标自检未通过：{exc}", file=sys.stderr)
+        print(f"       {describe_input_environment()}", file=sys.stderr)
+        return 1
+
     print(f"滚动测试将在 {args.delay} 秒后开始，请立即切换到目标页面。")
     print("注意：运行期间不要触碰鼠标键盘；把鼠标移到屏幕左上角可急停。")
     time.sleep(max(0.0, float(args.delay)))
-    pyautogui.moveTo(int(args.x), int(args.y), duration=0.2)
+
+    target_x, target_y = int(args.x), int(args.y)
+    pyautogui.moveTo(target_x, target_y, duration=0.2)
+    moved = pyautogui.position()
+    if (int(moved[0]), int(moved[1])) != (target_x, target_y):
+        print(
+            f"[失败] 鼠标未能移动到 ({target_x}, {target_y})，实际停在 {tuple(moved)}。"
+            "滚动测试不会生效，已中止。",
+            file=sys.stderr,
+        )
+        return 1
+
     for index in range(1, int(args.times) + 1):
         time.sleep(max(0.0, float(args.interval)))
         pyautogui.scroll(int(args.distance))

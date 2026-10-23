@@ -1,5 +1,12 @@
 # 交付报告 · VibeCoding_Project 全新原型
 
+> **历史快照（2026-10-22）**：本文记录当时的交付状态，其中的测试数字、“真实链路待验证”等表述已被后续真实运行与文档更新取代。
+>
+> 当前定位、证据与限制请以 [README.md](../README.md)、[EVIDENCE.md](EVIDENCE.md)、[ARCHITECTURE.md](ARCHITECTURE.md) 为准。
+>
+> 当前测试口径：**213 passed, 1 skipped**（本地 2026-10-23 复跑）；下文 120/131/148 等数字是当时快照。
+> 下文历史命令中的 `cd VibeCoding_Project` 按当时工作区书写；当前请在仓库根目录执行 README 中的命令。
+
 > 真源：`../NEWREADME.MD`（IRDV-DOC-001 v1.0，2026-10-22）
 > 交付日期：2026-10-22
 > 定位：按设计文档从零实现的可运行原型；**未修改原项目任何文件**，所有产物位于 `VibeCoding_Project/`。
@@ -93,7 +100,7 @@ cd VibeCoding_Project
 python run.py demo
 ```
 
-预期：终端显示 3 个岗位与运行目录；检查 `jobs.jsonl` 每行一个 JSON，`job_desc` 无重复、无“去App/魏女士/工作地址”。
+预期：终端显示 3 个岗位与运行目录；检查 `jobs.jsonl` 每行一个 JSON，`job_desc` 无重复、无“去App/示例招聘者/工作地址”。
 
 ### 4.2 前端界面（需安装 Streamlit 栈）
 

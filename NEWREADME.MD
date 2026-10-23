@@ -1,5 +1,13 @@
 # 智能招聘数据抓取与可视化平台
 
+> **历史设计输入 / 当前定位**
+>
+> 本文件是 2026-10-22 的设计评审稿，描述“招聘数据平台”的原始目标。
+>
+> 当前仓库已调整为**视觉 RPA 工程样品**，以 BOSS直聘为第一个案例；现状、证据、扩展边界以 [README.md](README.md)、[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)、[docs/EVIDENCE.md](docs/EVIDENCE.md) 为准。
+>
+> 文中引用的 `screenshot.png`、`tmp.py`、`out.json`、`output/` 等原项目文件未随本仓库分发；这些引用仅作历史设计参考，不是当前可运行入口。
+
 ## 项目设计文档
 
 | 文档属性 | 内容 |
@@ -339,7 +347,7 @@ time.sleep(3)
 
 pyautogui.moveTo(x, y)  # 滚动初始坐标
 for _ in range(100):    # 模拟轮次，可配置
-	time.sleep(0.5)     
+	time.sleep(0.5)
 	pyautogui.scroll(distance) # 初始滚动距离，注意是负值
 ```
 

@@ -1,5 +1,13 @@
 # 真实页面运行手册（RUNBOOK）
 
+> **2026-10-23 更新**：项目定位已调整为“视觉 RPA 工程样品”，当前以 BOSS直聘为案例。
+>
+> 真实运行证据见 [EVIDENCE.md](EVIDENCE.md)，页面结构/已知问题见 [CASE_BOSS.md](CASE_BOSS.md)。
+>
+> 运行前请阅读 [PRIVACY.md](PRIVACY.md)：`runtime/` 含真实截图与招聘者信息，不可上传。
+>
+> 以下命令默认在仓库根目录执行。
+
 本手册面向在 Windows 桌面上对 BOSS直聘 等招聘页面执行真实采集。**先跑 mock demo 确认安装与输出格式，再做真实运行。**
 
 ## 1. 前置条件
@@ -14,7 +22,7 @@
 ## 2. 安装与自检
 
 ```powershell
-cd VibeCoding_Project
+# 在仓库根目录执行
 python -m pip install -r requirements.txt
 python run.py demo
 python -m pytest -q

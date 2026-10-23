@@ -10,8 +10,11 @@
 | `samples/demo_story.json` | 为本原型编写的 mock 场景剧本 | mock 驱动的确定性演示：3 岗位 × 3 页描述、重叠行、噪声、停止标志、列表页脚 |
 | `samples/overlay_preview.png` | 由 `recruiting_capture.imaging.render_regions` 渲染 | 无需启动 Streamlit 即可查看半透明选框效果 |
 | `samples/demo_output/` | `python run.py demo` 的真实产物 | 不运行也能直接检查 JSONL/JSON/报告格式 |
+| `samples/sanitized/` | 合成的脱敏数据 | 展示输出 schema；可公开，不含真实页面/招聘者信息 |
 
 > 说明：`demo_output/capture_report.json` 来源于一次真实 demo 运行；为了作为可移植样本，其中的 `run_dir`/`outputs` 已归一化为样本目录，并移除了指向已清理运行目录的副本路径（文件内 `note` 字段有标注）。
+
+> 隐私说明：`screenshot_1080p.png`、`ocr_sample_1080p.json`、`prototype_out_dirty.json`、`demo_story.json` 是早期开发用的示意样本，可能包含示例姓名/公司名。它们不是 `runtime/` 真实数据，但公开分发前仍建议替换为合成夹具；替换会涉及测试断言，属于后续代码/测试改动。本次新增的 `sanitized/` 是纯合成数据，可安全公开。
 
 OCR 样本字段说明：
 

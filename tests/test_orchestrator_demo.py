@@ -103,3 +103,43 @@ def test_all_desc_lines_clean(tmp_path, demo_plan, project_root, no_sleep) -> No
     summary = run_plan(plan, run_dir, project_root, sleep=no_sleep)
     for record in summary.records:
         assert all(not is_noise_line(line) for line in record.job_desc)
+
+
+def test_async_matches_sync_byte_for_byte(tmp_path, demo_plan, project_root, no_sleep) -> None:
+    """I-3：llm_async=false/true 两次运行结果必须逐字节相同。
+
+    唯一的规范化是剔除 captured_at：两次运行由 generate_timestamp() 生成不同的墙钟时间，
+    与异步执行无关；其余字段（含行序、描述内容、告警）一律严格比较。
+    """
+
+    def _normalized(path) -> list[str]:
+        lines = []
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            if not raw.strip():
+                continue
+            record = json.loads(raw)
+            record.pop("captured_at", None)
+            lines.append(json.dumps(record, ensure_ascii=False, sort_keys=True))
+        return lines
+
+    runs = {}
+    reports = {}
+    for flag in (False, True):
+        plan = _clone(demo_plan, tmp_path / f"output_{flag}")
+        plan.run.llm_async = flag
+        run_dir = tmp_path / f"run_{flag}"
+        run_plan(plan, run_dir, project_root, sleep=no_sleep)
+        runs[flag] = _normalized(run_dir / "jobs.jsonl")
+        reports[flag] = json.loads(
+            (run_dir / "capture_report.json").read_text(encoding="utf-8")
+        )
+        assert (run_dir / "raw" / "sms_A.json").is_file()
+
+    assert runs[False] == runs[True]
+    assert len(runs[False]) == 3
+    assert reports[False]["llm_async"] is False
+    assert reports[True]["llm_async"] is True
+    for report in reports.values():
+        assert report["llm_calls"] > 0
+        assert report["llm_calls"] == report["llm_calls_sync"] + report["llm_calls_async"]
+        assert report["llm_wait_ms"] >= 0

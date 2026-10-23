@@ -21,6 +21,25 @@ def resolve_project_path(project_root: str | Path, value: str | Path) -> Path:
     return path if path.is_absolute() else Path(project_root) / path
 
 
+def build_llm(plan: CapturePlan) -> LLMClient:
+    """按计划构建大模型客户端（主线程与 worker 共用同一份配置）。"""
+
+    if plan.run.llm == "deepseek":
+        from .llm.deepseek_client import DeepSeekClient
+
+        llm: LLMClient = DeepSeekClient(
+            base_url=plan.run.llm_base_url,
+            model=plan.run.llm_model,
+            timeout=plan.run.llm_timeout_seconds,
+            max_retries=plan.run.llm_max_retries,
+        )
+        logger.info("使用 DeepSeek 视觉大模型：%s", plan.run.llm_model)
+    else:
+        llm = MockLLMClient()
+        logger.info("使用 mock 视觉大模型（确定性规则）")
+    return llm
+
+
 def build_engines(
     plan: CapturePlan,
     project_root: str | Path,
@@ -51,18 +70,6 @@ def build_engines(
         ocr = MockOcrEngine()
         logger.info("使用 mock OCR（读取场景文本）")
 
-    if plan.run.llm == "deepseek":
-        from .llm.deepseek_client import DeepSeekClient
-
-        llm: LLMClient = DeepSeekClient(
-            base_url=plan.run.llm_base_url,
-            model=plan.run.llm_model,
-            timeout=plan.run.llm_timeout_seconds,
-            max_retries=plan.run.llm_max_retries,
-        )
-        logger.info("使用 DeepSeek 视觉大模型：%s", plan.run.llm_model)
-    else:
-        llm = MockLLMClient()
-        logger.info("使用 mock 视觉大模型（确定性规则）")
+    llm = build_llm(plan)
 
     return driver, ocr, llm

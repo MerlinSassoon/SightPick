@@ -65,7 +65,7 @@
     "llm_model": "deepseek-flash",
     "llm_base_url": "https://api.deepseek.com",
     "llm_timeout_seconds": 60,
-    "llm_max_retries": 2,
+    "llm_max_retries": 1,
     "minimize_frontend": true,
     "window_title": "Streamlit",
     "start_delay_seconds": 5,

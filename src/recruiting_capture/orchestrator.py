@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .capture.window import minimize_frontend, restore_window
-from .engines import build_engines, resolve_project_path
+from .engines import build_engines, build_llm, resolve_project_path
 from .errors import ConfigError, RecruitingError, ScreenChangedError
 from .modes.base import ModeContext
 from .modes.short_message import ShortMessageMode
@@ -152,6 +152,9 @@ def run_plan(
             sleep=sleep,
             screenshots_dir=paths.screenshots_dir,
             save_screenshots=plan.run.save_screenshots,
+            # 必须是 lambda：DeepSeekClient 缺 Key 时抛 LLMError，延迟到 worker 启动时
+            # （主线程、Thread.start() 之前）才调用，异常仍在主线程抛出。
+            llm_factory=lambda: build_llm(plan),
         )
 
         transcribe_modes: dict[str, TranscribeMode] = {}
@@ -281,6 +284,9 @@ def run_plan(
         except Exception:  # pragma: no cover
             pass
         finished_at = datetime.now().astimezone()
+        # 在此刻计算：所有 workflow() 已返回、worker.close() 已执行，异步计数已落定
+        _sync_calls = int(getattr(llm, "calls", 0)) if "llm" in locals() else 0
+        _async_calls = int((context.stats if context else {}).get("llm_calls_async", 0))
         report = {
             "schema_version": "1.0",
             "plan_name": plan.name,
@@ -309,7 +315,11 @@ def run_plan(
             "errors": errors,
             "stats": dict(context.stats) if context else {},
             "ocr_calls": int(getattr(ocr, "calls", 0)) if "ocr" in locals() else 0,
-            "llm_calls": int(getattr(llm, "calls", 0)) if "llm" in locals() else 0,
+            "llm_calls": _sync_calls + _async_calls,
+            "llm_calls_sync": _sync_calls,
+            "llm_calls_async": _async_calls,
+            "llm_wait_ms": int((context.stats if context else {}).get("llm_wait_ms", 0)),
+            "llm_async": bool(plan.run.llm_async),
             "outputs": paths.describe(),
             "records": [record.to_dict() for record in records],
             "plan": plan.to_dict(),

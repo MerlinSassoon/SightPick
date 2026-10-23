@@ -431,7 +431,13 @@ class RunConfig:
     llm_model: str = "deepseek-flash"
     llm_base_url: str = "https://api.deepseek.com"
     llm_timeout_seconds: int = 60
-    llm_max_retries: int = 2
+    llm_max_retries: int = 1
+    llm_async: bool = True
+    llm_worker_threads: int = 2
+    llm_queue_max: int = 8
+    llm_task_retries: int = 1
+    llm_task_timeout_seconds: int = 90
+    llm_drain_timeout_seconds: int = 30
     minimize_frontend: bool = False
     window_title: str = "Streamlit"
     start_delay_seconds: int = 5
@@ -454,6 +460,12 @@ class RunConfig:
         "llm_base_url",
         "llm_timeout_seconds",
         "llm_max_retries",
+        "llm_async",
+        "llm_worker_threads",
+        "llm_queue_max",
+        "llm_task_retries",
+        "llm_task_timeout_seconds",
+        "llm_drain_timeout_seconds",
         "minimize_frontend",
         "window_title",
         "start_delay_seconds",
@@ -492,7 +504,27 @@ class RunConfig:
                 data.get("llm_timeout_seconds", 60), "llm_timeout_seconds", minimum=1
             ),
             llm_max_retries=_as_int(
-                data.get("llm_max_retries", 2), "llm_max_retries", minimum=0
+                data.get("llm_max_retries", 1), "llm_max_retries", minimum=0
+            ),
+            llm_async=_as_bool(data.get("llm_async", True), "llm_async"),
+            llm_worker_threads=_as_int(
+                data.get("llm_worker_threads", 2), "llm_worker_threads", minimum=1
+            ),
+            llm_queue_max=_as_int(
+                data.get("llm_queue_max", 8), "llm_queue_max", minimum=1
+            ),
+            llm_task_retries=_as_int(
+                data.get("llm_task_retries", 1), "llm_task_retries", minimum=0
+            ),
+            llm_task_timeout_seconds=_as_int(
+                data.get("llm_task_timeout_seconds", 90),
+                "llm_task_timeout_seconds",
+                minimum=1,
+            ),
+            llm_drain_timeout_seconds=_as_int(
+                data.get("llm_drain_timeout_seconds", 30),
+                "llm_drain_timeout_seconds",
+                minimum=0,
             ),
             minimize_frontend=_as_bool(
                 data.get("minimize_frontend", False), "minimize_frontend"
@@ -541,6 +573,14 @@ class RunConfig:
             raise ConfigError("min_action_interval_seconds 不能大于 max_action_interval_seconds")
         if self.px_per_scroll_unit <= 0:
             raise ConfigError("px_per_scroll_unit 必须大于 0")
+        # 仅记录，不 raise：既有计划与测试会在不改 run 配置的情况下调用 validate()
+        worst = self.llm_timeout_seconds * (self.llm_max_retries + 1)
+        self._timeout_warning = ""
+        if self.llm_async and self.llm_task_timeout_seconds > worst:
+            self._timeout_warning = (
+                f"llm_task_timeout_seconds({self.llm_task_timeout_seconds}) 大于单任务最坏耗时"
+                f"({worst}s)：主线程可能先放弃等待而 worker 稍后完成（结果会被幂等忽略）"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -552,6 +592,12 @@ class RunConfig:
             "llm_base_url": self.llm_base_url,
             "llm_timeout_seconds": self.llm_timeout_seconds,
             "llm_max_retries": self.llm_max_retries,
+            "llm_async": self.llm_async,
+            "llm_worker_threads": self.llm_worker_threads,
+            "llm_queue_max": self.llm_queue_max,
+            "llm_task_retries": self.llm_task_retries,
+            "llm_task_timeout_seconds": self.llm_task_timeout_seconds,
+            "llm_drain_timeout_seconds": self.llm_drain_timeout_seconds,
             "minimize_frontend": self.minimize_frontend,
             "window_title": self.window_title,
             "start_delay_seconds": self.start_delay_seconds,

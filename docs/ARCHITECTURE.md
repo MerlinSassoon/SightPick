@@ -62,10 +62,23 @@ GUI 页面
   │    └─ denoise：文本清理/结构化（可异步）
   │
   └─ Orchestrator
-       ├─ 每条记录 append + fsync 到 jobs.jsonl
-       ├─ 运行结束写 jobs.json / capture_report.json
+       ├─ 批次完成或中断暂停时，把已完成记录 append + fsync 到 jobs.jsonl
+       ├─ 运行结束/用户结束时写 jobs.json / capture_report.json
        └─ 可选复制到 output.dir
 ```
+
+### 中断控制通道（暂停 / 继续 / 结束）
+
+条目捕获阶段出现可预期的 `RecruitingError` 时：
+
+- 子进程先等待异步去噪，再保存已完成 items；
+- 写 `interrupt_status.json`（`state=paused`、原因、已保存条数）；
+- 恢复前端窗口，轮询 `interrupt_decision.json`；
+- 前端“继续采集”写 `resume`，后端重试当前条目；
+- 前端“结束采集”写 `stop`，后端保留数据并正常退出；
+- 超时（默认 30 分钟）按结束处理。
+
+这是文件级 IPC，不引入额外服务；`runtime/` 已被 gitignore，控制文件不会上传。
 
 ### 为什么先裁切、再 OCR
 

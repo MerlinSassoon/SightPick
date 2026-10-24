@@ -11,9 +11,20 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .capture.window import minimize_frontend, restore_window
+from .capture.window import minimize_frontend, minimize_window, restore_window
+from .control import (
+    DEFAULT_PAUSE_TIMEOUT_SECONDS,
+    clear_decision,
+    wait_for_decision,
+    write_status,
+)
 from .engines import build_engines, build_llm, resolve_project_path
-from .errors import ConfigError, RecruitingError, ScreenChangedError
+from .errors import (
+    ConfigError,
+    RecruitingError,
+    ScreenChangedError,
+    StopRequested,
+)
 from .modes.base import ModeContext
 from .modes.short_message import ShortMessageMode
 from .modes.transcribe import TranscribeMode
@@ -64,6 +75,8 @@ def _stop_message(stop_reason: str, count: int, max_jobs: int) -> str:
         return f"全部短信区域已执行完毕，共采集 {count} 份岗位。"
     if stop_reason == "error":
         return "运行过程中发生错误，已保留已采集的数据，请查看日志。"
+    if stop_reason == "user_stopped":
+        return "用户选择结束采集；中断前已保存的数据保留在 jobs.jsonl 中。"
     if stop_reason == "max_rounds":
         return "达到最大循环轮次，已停止；请检查滚动停止条件或页面状态。"
     return f"运行结束，共采集 {count} 份岗位。"
@@ -97,11 +110,169 @@ def run_plan(
     records: list[JobRecord] = []
     errors: list[str] = []
     warnings: list[str] = []
+    partial_saves: list[dict[str, Any]] = []
+    partial_saved_counts: dict[str, int] = {}
     stop_reason = "queue_exhausted"
     stop_marker: str | None = None
     hwnd: int | None = None
     context: ModeContext | None = None
     stop_message = ""
+
+    def _append_payload(payload: dict[str, Any], sms_name: str) -> bool:
+        """把一条已采集结果写入 jobs.jsonl；到达全局上限时返回 False。"""
+
+        if len(records) >= plan.run.max_jobs:
+            return False
+        record = JobRecord(
+            job_title=str(payload["job_title"]),
+            job_desc=list(payload["job_desc"]),
+            captured_at=generate_timestamp(),
+            company=payload.get("company"),
+            salary=payload.get("salary"),
+            sms_region=sms_name,
+            source={
+                "title_region": plan.output.title_region,
+                "desc_region": plan.output.desc_region,
+                "data_structure": (
+                    plan.region_configs[sms_name].data_structure
+                    if isinstance(plan.region_configs[sms_name], SmsConfig)
+                    else None
+                ),
+            },
+            warnings=list(payload.get("warnings") or []),
+        )
+        writer.append(record)
+        records.append(record)
+        log.info(
+            "已落盘 %d/%d：%s（描述 %d 行）",
+            len(records),
+            plan.run.max_jobs,
+            record.job_title,
+            len(record.job_desc),
+        )
+        return True
+
+    def _save_partial(
+        mode: ShortMessageMode,
+        sms_name: str,
+        exc: BaseException,
+    ) -> int:
+        """等待异步去噪后，把当前区域已完成 items 增量落盘。"""
+
+        start = partial_saved_counts.get(sms_name, 0)
+        payloads = mode.recover_records(plan.output)
+        saved_now = 0
+        for payload in payloads[start:]:
+            if not _append_payload(payload, sms_name):
+                break
+            saved_now += 1
+        total = start + saved_now
+        if saved_now:
+            partial_saved_counts[sms_name] = total
+            partial_saves.append(
+                {
+                    "region": sms_name,
+                    "saved": total,
+                    "new": saved_now,
+                    "error": str(exc),
+                }
+            )
+            write_json(
+                paths.raw_dir / f"sms_{sms_name}.partial.json",
+                {
+                    "region": sms_name,
+                    "saved": total,
+                    "error": str(exc),
+                    "records": payloads[:total],
+                },
+            )
+            message = (
+                f"短信区域 {sms_name} 中断前已保存 "
+                f"{total} 条记录（原因：{exc}）"
+            )
+            warnings.append(message)
+            log.warning(message)
+        return total
+
+    def _handle_interrupt(
+        exc: RecruitingError,
+        mode: ShortMessageMode,
+        sms_name: str,
+    ) -> str:
+        """暂停、保存、等待前端选择；返回 resume/stop。"""
+
+        saved = 0
+        try:
+            saved = _save_partial(mode, sms_name, exc)
+        except Exception as save_exc:  # 保存失败不能覆盖原始异常
+            warnings.append(f"短信区域 {sms_name} 中断前保存失败：{save_exc}")
+            log.exception("短信区域 %s 中断前保存失败：%s", sms_name, save_exc)
+
+        clear_decision(paths.run_dir)
+        hwnd_value = getattr(hwnd, "hwnd", hwnd) if hwnd else None
+        if hwnd_value:
+            try:
+                restore_window(int(hwnd_value))
+            except Exception:  # pragma: no cover - 窗口恢复失败不应阻止保存
+                log.exception("恢复前端窗口失败：hwnd=%s", hwnd_value)
+
+        try:
+            write_status(
+                paths.run_dir,
+                "paused",
+                str(exc),
+                saved=saved,
+            )
+        except Exception:  # pragma: no cover - 状态文件失败不阻塞人工处理
+            log.exception("写入暂停状态失败：%s", paths.run_dir)
+
+        log.warning(
+            "区域 %s 已暂停：%s；已保存 %d 条。等待前端选择“继续采集/结束采集”。",
+            sms_name,
+            exc,
+            saved,
+        )
+        try:
+            action = wait_for_decision(
+                paths.run_dir,
+                timeout_seconds=DEFAULT_PAUSE_TIMEOUT_SECONDS,
+            )
+        except Exception:
+            log.exception("等待继续/结束决定失败，按结束处理")
+            action = "stop"
+
+        if action == "resume":
+            try:
+                write_status(
+                    paths.run_dir,
+                    "running",
+                    "用户选择继续采集",
+                    saved=saved,
+                )
+            except Exception:  # pragma: no cover
+                log.exception("写入继续状态失败：%s", paths.run_dir)
+            if hwnd_value:
+                try:
+                    minimize_window(int(hwnd_value))
+                    sleep(2.0)
+                except Exception:  # pragma: no cover - 窗口最小化失败不阻止继续
+                    log.exception("继续前最小化前端失败：hwnd=%s", hwnd_value)
+            warnings.append(f"区域 {sms_name} 用户选择继续采集")
+            log.info("区域 %s 用户选择继续采集，重试当前条目", sms_name)
+            return "resume"
+
+        reason = (
+            "用户选择结束采集"
+            if action == "stop"
+            else "等待用户处理超时，自动结束采集"
+        )
+        try:
+            write_status(paths.run_dir, "stopped", reason, saved=saved)
+        except Exception:  # pragma: no cover
+            log.exception("写入结束状态失败：%s", paths.run_dir)
+        warnings.append(f"区域 {sms_name} {reason}")
+        log.info("区域 %s %s；已保存 %d 条", sms_name, reason, saved)
+        return "stop"
 
     try:
         driver, ocr, llm = build_engines(plan, project_root)
@@ -186,11 +357,35 @@ def run_plan(
             remaining = plan.run.max_jobs - len(records)
             sms_mode = sms_modes[sms_name]
 
+            sms_mode.interrupt_handler = (
+                lambda exc, mode=sms_mode, name=sms_name: _handle_interrupt(
+                    exc, mode, name
+                )
+            )
+
             try:
                 raw = sms_mode.workflow(max_items=remaining)
+            except StopRequested as exc:
+                stop_reason = "user_stopped"
+                warnings.append(str(exc))
+                log.info("用户选择结束采集：%s", exc)
+                break
             except RecruitingError as exc:
                 errors.append(f"短信区域 {sms_name}：{exc}")
                 log.error("短信区域 %s 执行失败：%s", sms_name, exc)
+
+                # 不是条目捕获阶段的错误（例如 analyze/click）：
+                # 不进入暂停流程，但仍尽力保存当前 items。
+                try:
+                    _save_partial(sms_mode, sms_name, exc)
+                except Exception as partial_exc:  # 保存失败不能覆盖原始异常
+                    warnings.append(
+                        f"短信区域 {sms_name} 中断前保存失败：{partial_exc}"
+                    )
+                    log.exception(
+                        "短信区域 %s 中断前保存失败：%s", sms_name, partial_exc
+                    )
+
                 if plan.run.on_job_error == "skip":
                     warnings.append(f"已按 on_job_error=skip 跳过短信区域 {sms_name}")
                     continue
@@ -206,37 +401,11 @@ def run_plan(
             elif sms_mode.stop_reason == "max_rounds":
                 stop_reason = "max_rounds"
 
-            for payload in sms_records:
-                if len(records) >= plan.run.max_jobs:
+            already_saved = partial_saved_counts.get(sms_name, 0)
+            for payload in sms_records[already_saved:]:
+                if not _append_payload(payload, sms_name):
                     stop_reason = "max_jobs_reached"
                     break
-                record = JobRecord(
-                    job_title=str(payload["job_title"]),
-                    job_desc=list(payload["job_desc"]),
-                    captured_at=generate_timestamp(),
-                    company=payload.get("company"),
-                    salary=payload.get("salary"),
-                    sms_region=sms_name,
-                    source={
-                        "title_region": plan.output.title_region,
-                        "desc_region": plan.output.desc_region,
-                        "data_structure": (
-                            plan.region_configs[sms_name].data_structure
-                            if isinstance(plan.region_configs[sms_name], SmsConfig)
-                            else None
-                        ),
-                    },
-                    warnings=list(payload.get("warnings") or []),
-                )
-                writer.append(record)
-                records.append(record)
-                log.info(
-                    "已落盘 %d/%d：%s（描述 %d 行）",
-                    len(records),
-                    plan.run.max_jobs,
-                    record.job_title,
-                    len(record.job_desc),
-                )
 
             log.info(
                 "短信区域 %s 完成：停止原因=%s，累计落盘 %d 份",
@@ -313,6 +482,7 @@ def run_plan(
             "stop_message": stop_message,
             "warnings": sorted(set(warnings)),
             "errors": errors,
+            "partial_saves": partial_saves,
             "stats": dict(context.stats) if context else {},
             "ocr_calls": int(getattr(ocr, "calls", 0)) if "ocr" in locals() else 0,
             "llm_calls": _sync_calls + _async_calls,

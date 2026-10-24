@@ -4,7 +4,7 @@
 >
 > 当前定位、证据与限制请以 [README.md](../README.md)、[EVIDENCE.md](EVIDENCE.md)、[ARCHITECTURE.md](ARCHITECTURE.md) 为准。
 >
-> 当前测试口径：**213 passed, 1 skipped**（本地 2026-10-23 复跑）；下文 120/131/148 等数字是当时快照。
+> 当前测试口径：**214 passed, 1 skipped**（本地 2026-10-24 复跑）；下文 120/131/148 等数字是当时快照。
 > 下文历史命令中的 `cd VibeCoding_Project` 按当时工作区书写；当前请在仓库根目录执行 README 中的命令。
 
 > 真源：`../NEWREADME.MD`（IRDV-DOC-001 v1.0，2026-10-22）

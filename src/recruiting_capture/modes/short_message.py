@@ -5,9 +5,9 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Mapping
 
-from ..errors import ConfigError, LLMError, RecruitingError
+from ..errors import ConfigError, LLMError, RecruitingError, StopRequested
 from ..models.config import DATA_STRUCTURE_DICT, OutputConfig, SmsConfig
 from ..models.region import Region
 from ..text_utils import (
@@ -59,6 +59,8 @@ class ShortMessageMode(BaseRegionMode):
         self.stop_marker: str | None = None
         self.warnings: list[str] = []
         self._processed = 0
+        # 由 orchestrator 注入：保存 partial、等待前端 resume/stop，返回动作。
+        self.interrupt_handler: Callable[[RecruitingError], str] | None = None
 
     # ------------------------------------------------------------------ #
     # 绑定（6.2 函数五）
@@ -122,6 +124,18 @@ class ShortMessageMode(BaseRegionMode):
                         f"{len(abandoned)} 个异步去噪未完成，已按规则兜底"
                     )
 
+    def recover_records(self, output: OutputConfig) -> list[dict[str, Any]]:
+        """中断时保存：先等待异步去噪完成，再转换已完成 items。
+
+        暂停发生在 ``workflow()`` 内部，worker 仍存活；这里走与正常路径
+        相同的 ``_resolve_all_pending()`` 屏障，等待 LLM 结果，而不是
+        直接用 OCR 原文兜底。只有超时句柄才会由屏障按现有规则降级。
+        """
+
+        self._resolve_all_pending()
+        self._assign_titles()
+        return self.to_records(output)
+
     def _collect(self, limit: int, worker: "LLMWorker | None" = None) -> None:
         """点击/滚动/截图/OCR 主循环（原 workflow 的循环体）。"""
 
@@ -161,7 +175,24 @@ class ShortMessageMode(BaseRegionMode):
                 frame, lines = self.analyze()
                 continue
 
-            item = self._invoke_transcribe_modes(worker)
+            while True:
+                try:
+                    item = self._invoke_transcribe_modes(worker)
+                    break
+                except RecruitingError as exc:
+                    handler = self.interrupt_handler
+                    if handler is None:
+                        raise
+                    action = handler(exc)
+                    if action == "resume":
+                        logger.info(
+                            "区域 %s 用户选择继续采集，重试当前条目",
+                            self.region_name,
+                        )
+                        continue
+                    raise StopRequested(
+                        f"区域 {self.region_name} 用户选择结束采集：{exc}"
+                    ) from exc
             self.items.append(item)
             self._processed += 1
             self.warnings.extend(item.warnings)
@@ -232,11 +263,24 @@ class ShortMessageMode(BaseRegionMode):
                 if not isinstance(handle, PendingText):
                     continue
                 value, warnings = handle.resolve(budget)
-                if value is _UNRESOLVED:
+                empty = (
+                    value is _UNRESOLVED
+                    or value is None
+                    or (isinstance(value, str) and not value.strip())
+                    or (
+                        isinstance(value, (list, tuple))
+                        and not any(str(part).strip() for part in value)
+                    )
+                )
+                if empty:
                     value = rule_based_result(
                         handle.payload,
                         self.transcribe_modes[name].config.expected_format,
                     )
+                    warnings = [
+                        *warnings,
+                        "异步去噪未完成，已用 OCR 原文兜底",
+                    ]
                 item.values[name] = value
                 item.ordered_results = [
                     item.values[n] for n in self.config.invoke_regions

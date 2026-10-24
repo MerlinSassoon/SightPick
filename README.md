@@ -33,7 +33,7 @@ SightPick is a visual RPA engineering sample. It captures regions of a GUI, reco
 | 真实链路（pyautogui + PaddleOCR + DeepSeek） | ✅ 已跑通；7 次 real + DeepSeek 成功批次 |
 | 稳定批次 | ✅ 最近连续 5 次：19 条记录，约 367 秒，0 warning |
 | 单次最大采集量 | 5 条（**20 条验收尚未完成**） |
-| 单元/契约/端到端测试 | ✅ 213 passed, 1 skipped（本地复跑） |
+| 单元/契约/端到端测试 | ✅ 214 passed, 1 skipped（本地复跑） |
 | 描述重复行 | ✅ 35 条真实记录 0 重复 |
 | 标题/描述质量 | ⚠️ 仍需治理；标题缺陷、描述噪声/PII 已量化 |
 | 20 条 / ground truth / 成本 | ⏳ 尚未完成 |
@@ -157,19 +157,38 @@ python run.py run --plan configs/boss_1080p_example.json
 
 ## 验证现状
 
-本地复跑（2026-10-23）：
+本地复跑（2026-10-24）：
 
 ```text
 python -m pytest -q
-213 passed, 1 skipped
+214 passed, 1 skipped
 ```
 
 - 真实 OCR 冒烟：`$env:RUN_REAL_OCR="1"; python -m pytest -q tests/test_real_ocr_smoke.py` → 1 passed；
+- 中断保护：A 批次中途异常时，已完成条目会写入 `jobs.jsonl`，并在 `capture_report.json` 的 `partial_saves` 中记录；
 - Streamlit AppTest：空状态/示例截图/示例配置无异常；
 - 真实运行：24 个运行目录（含 1 个 demo）与 35 条真实记录；7 次 real + DeepSeek 成功批次；最近连续 5 次成功，19 条记录，0 warning；
 - 35 条真实记录描述重复行 0。
 
 **注意**：这些是“工程运行证据”，不是“数据质量验收”。标题/描述质量、20 条稳定性、准确率、成本仍未达标，详见 [docs/EVIDENCE.md](docs/EVIDENCE.md)。
+
+---
+
+## 中断处理：暂停 / 继续 / 结束
+
+当条目捕获阶段出现可预期的 `RecruitingError`（例如锚点暂时找不到）时：
+
+1. 先等待当前已提交的 LLM 异步去噪完成；
+2. 把已完成的记录写入 `jobs.jsonl` / `jobs.json`，另存 `raw/sms_*.partial.json`；
+3. 在 `capture_report.json` 的 `partial_saves` 中记录保存数量与原因；
+4. 恢复前端窗口，写 `interrupt_status.json`，进入暂停，等待用户处理页面问题；
+5. 前端出现两个按钮：
+   - **继续采集**：写 `interrupt_decision.json`，后端重试当前条目，成功后继续；
+   - **结束采集**：写结束决定，后端保留已保存数据并正常退出。
+
+暂停等待默认上限 30 分钟；超时按“结束采集”处理。
+
+如果进程被强制 `terminate()`、断电或崩溃，仍可能丢当前批次；这类场景需要进一步做逐条 checkpoint。
 
 ---
 

@@ -51,6 +51,7 @@ from recruiting_capture.display import (  # noqa: E402
     mapping_from_dict,
     mapping_to_dict,
 )
+from recruiting_capture.control import read_status, write_decision  # noqa: E402
 from recruiting_capture.errors import ConfigError  # noqa: E402
 from recruiting_capture.imaging import render_regions  # noqa: E402
 from recruiting_capture.models.config import (  # noqa: E402
@@ -1026,6 +1027,15 @@ def _stop_process(process) -> None:
         st.warning(f"停止进程失败：{exc}")
 
 
+def _send_decision(run_dir: Path, action: str) -> None:
+    """把“继续采集/结束采集”写给后端控制通道。"""
+
+    try:
+        write_decision(run_dir, action)
+    except Exception as exc:  # pragma: no cover - 文件系统异常
+        st.error(f"发送“{action}”指令失败：{exc}")
+
+
 _init_state()
 
 
@@ -1841,14 +1851,47 @@ with tab_run:
             run_dir = Path(run_dir_value)
             st.divider()
             st.subheader("运行状态")
-            status = "运行中" if process is not None and process.poll() is None else "已结束"
+            control = read_status(run_dir) or {}
+            paused = bool(
+                control.get("state") == "paused"
+                and process is not None
+                and process.poll() is None
+            )
+            status = "已暂停（等待处理）" if paused else (
+                "运行中" if process is not None and process.poll() is None else "已结束"
+            )
             col_status, col_refresh, col_stop = st.columns([2, 1, 1])
             col_status.write(f"状态：**{status}**；PID：{getattr(process, 'pid', '—')}")
             col_status.write(f"运行目录：`{run_dir}`")
             col_refresh.button("刷新日志/计数", key="refresh_run")
-            if col_stop.button("停止运行", key="stop_run"):
+            if col_stop.button(
+                "强制停止（不等待）",
+                key="stop_run",
+                disabled=paused,
+            ):
                 _stop_process(process)
-                st.warning("已发送停止指令；已采集数据会保留在 jobs.jsonl 中。")
+                st.warning("已发送强制停止指令；已落盘数据保留在 jobs.jsonl 中。")
+
+            if paused:
+                saved = int(control.get("saved", 0) or 0)
+                st.warning(
+                    "采集已暂停，等待你处理页面问题。"
+                    f"中断原因：{control.get('message') or '未知'}；"
+                    f"已保存 {saved} 条。处理后可继续，或直接结束。"
+                )
+                col_resume, col_finish = st.columns(2)
+                if col_resume.button(
+                    "继续采集",
+                    type="primary",
+                    key="resume_run",
+                ):
+                    _send_decision(run_dir, "resume")
+                    st.rerun()
+                if col_finish.button("结束采集", key="finish_run"):
+                    _send_decision(run_dir, "stop")
+                    st.warning("已发送结束指令；后端将保存并退出。")
+                    st.rerun()
+
             st.write(f"已落盘：{_count_jsonl(run_dir / 'jobs.jsonl')} 份")
             tab_log, tab_console = st.tabs(["run.log", "console.log"])
             with tab_log:

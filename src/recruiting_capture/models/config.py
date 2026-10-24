@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
 from ..errors import ConfigError
+from .humanize import HumanizeConfig
 from .region import Region, ScreenGeometry
 
 SCHEMA_VERSION = "1.0"
@@ -451,6 +452,7 @@ class RunConfig:
     on_screen_change: str = "abort"
     save_screenshots: bool = False
     px_per_scroll_unit: float = 1.0
+    humanize: HumanizeConfig = field(default_factory=HumanizeConfig)
 
     FIELDS = (
         "max_jobs",
@@ -479,6 +481,7 @@ class RunConfig:
         "on_screen_change",
         "save_screenshots",
         "px_per_scroll_unit",
+        "humanize",
     )
 
     @classmethod
@@ -561,6 +564,7 @@ class RunConfig:
             px_per_scroll_unit=_as_float(
                 data.get("px_per_scroll_unit", 1.0), "px_per_scroll_unit", minimum=1e-6
             ),
+            humanize=HumanizeConfig.from_dict(data.get("humanize")),
         )
 
     def validate(self) -> None:
@@ -574,6 +578,7 @@ class RunConfig:
             raise ConfigError("min_action_interval_seconds 不能大于 max_action_interval_seconds")
         if self.px_per_scroll_unit <= 0:
             raise ConfigError("px_per_scroll_unit 必须大于 0")
+        self.humanize.validate()
         # 仅记录，不 raise：既有计划与测试会在不改 run 配置的情况下调用 validate()
         worst = self.llm_timeout_seconds * (self.llm_max_retries + 1)
         self._timeout_warning = ""
@@ -611,6 +616,7 @@ class RunConfig:
             "on_screen_change": self.on_screen_change,
             "save_screenshots": self.save_screenshots,
             "px_per_scroll_unit": self.px_per_scroll_unit,
+            "humanize": self.humanize.to_dict(),
         }
 
 

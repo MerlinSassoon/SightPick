@@ -36,3 +36,6 @@ class ScreenDriver(Protocol):
     def click(self, x: int | None = None, y: int | None = None) -> None: ...
 
     def scroll(self, amount: int) -> None: ...
+
+    def close(self) -> None:
+        """释放驱动资源（真实驱动用于停止后台微动线程；mock 为空操作）。"""

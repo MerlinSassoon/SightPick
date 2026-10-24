@@ -76,6 +76,14 @@
     "on_job_error": "abort",
     "on_screen_change": "abort",
     "save_screenshots": false,
-    "px_per_scroll_unit": 1.0
+    "px_per_scroll_unit": 1.0,
+    "humanize": {
+      "enabled": true,
+      "idle_wander": true,
+      "block_every": [12, 30],
+      "block_duration": [1.5, 5.0],
+      "pre_click_pause": [0.08, 0.28],
+      "drift_px": 1.5
+    }
   }
 }

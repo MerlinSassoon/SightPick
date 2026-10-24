@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .capture.driver import ScreenDriver
 from .capture.window import minimize_frontend, minimize_window, restore_window
 from .control import (
     DEFAULT_PAUSE_TIMEOUT_SECONDS,
@@ -18,7 +19,7 @@ from .control import (
     wait_for_decision,
     write_status,
 )
-from .engines import build_engines, build_llm, resolve_project_path
+from .engines import build_engines, build_llm, close_driver, resolve_project_path
 from .errors import (
     ConfigError,
     RecruitingError,
@@ -61,6 +62,22 @@ class RunSummary:
             "jobs_json": str(self.run_dir / "jobs.json"),
             "report": str(self.run_dir / "capture_report.json"),
         }
+
+
+def _set_idle_wander(driver: ScreenDriver | None, active: bool) -> None:
+    """暂停/恢复驱动的后台空闲微动（mock 或无拟人化时为空操作）。"""
+
+    if driver is None:
+        return
+    action = getattr(
+        driver, "start_idle_wander" if active else "stop_idle_wander", None
+    )
+    if not callable(action):
+        return
+    try:
+        action()
+    except Exception:  # pragma: no cover - 生命周期钩子失败不阻塞主流程
+        logger.debug("%s失败", "恢复空闲微动" if active else "暂停空闲微动", exc_info=True)
 
 
 def _stop_message(stop_reason: str, count: int, max_jobs: int) -> str:
@@ -117,6 +134,8 @@ def run_plan(
     hwnd: int | None = None
     context: ModeContext | None = None
     stop_message = ""
+    driver: ScreenDriver | None = None
+    idle_wanted = bool(plan.run.humanize.enabled and plan.run.humanize.idle_wander)
 
     def _append_payload(payload: dict[str, Any], sms_name: str) -> bool:
         """把一条已采集结果写入 jobs.jsonl；到达全局上限时返回 False。"""
@@ -201,6 +220,10 @@ def run_plan(
     ) -> str:
         """暂停、保存、等待前端选择；返回 resume/stop。"""
 
+        # 等待用户点“继续/结束”期间不要让后台微动线程去碰鼠标
+        if idle_wanted:
+            _set_idle_wander(driver, False)
+
         saved = 0
         try:
             saved = _save_partial(mode, sms_name, exc)
@@ -259,6 +282,8 @@ def run_plan(
                     log.exception("继续前最小化前端失败：hwnd=%s", hwnd_value)
             warnings.append(f"区域 {sms_name} 用户选择继续采集")
             log.info("区域 %s 用户选择继续采集，重试当前条目", sms_name)
+            if idle_wanted:
+                _set_idle_wander(driver, True)
             return "resume"
 
         reason = (
@@ -311,7 +336,14 @@ def run_plan(
                 "将在 %d 秒后开始自动操作，请立即切换到目标页面，并不要触碰鼠标与键盘。",
                 delay,
             )
-            sleep(delay)
+            # 倒计时属于“用户操作时间”，期间暂停后台微动
+            if idle_wanted:
+                _set_idle_wander(driver, False)
+            try:
+                sleep(delay)
+            finally:
+                if idle_wanted:
+                    _set_idle_wander(driver, True)
 
         context = ModeContext(
             driver=driver,
@@ -523,3 +555,5 @@ def run_plan(
                 restore_window(getattr(hwnd, "hwnd", hwnd))
             except Exception:  # pragma: no cover
                 pass
+        # 真实驱动的空闲微动线程必须显式收尾（mock 驱动为 no-op）
+        close_driver(driver)

@@ -40,36 +40,73 @@ def build_llm(plan: CapturePlan) -> LLMClient:
     return llm
 
 
+def build_driver(plan: CapturePlan, project_root: str | Path) -> ScreenDriver:
+    """按计划构建屏幕驱动（真实驱动在此注入拟人化配置）。"""
+
+    if plan.run.engine == "real":
+        from .capture.pyautogui_driver import PyAutoGuiDriver
+
+        humanize = plan.run.humanize
+        driver: ScreenDriver = PyAutoGuiDriver(
+            # enabled=false 时显式关闭；true 时允许环境变量统一兜底（测试可一键关）
+            humanize=None if humanize.enabled else False,
+            human=humanize.to_profile(),
+            idle_wander=humanize.idle_wander,
+        )
+        humanized = bool(getattr(driver, "humanized", humanize.enabled))
+        logger.info(
+            "使用真实屏幕驱动（pyautogui，拟人化=%s，空闲微动=%s）",
+            "开启" if humanized else "关闭",
+            "开启" if humanized and humanize.idle_wander else "关闭",
+        )
+        return driver
+
+    scenario_path = resolve_project_path(project_root, plan.run.mock_scenario)
+    mock: ScreenDriver = MockScreenDriver.from_file(
+        scenario_path,
+        plan.regions,
+        screen_size=(plan.screen.width, plan.screen.height),
+        px_per_scroll_unit=plan.run.px_per_scroll_unit,
+    )
+    logger.info("使用 mock 屏幕驱动，场景：%s", scenario_path)
+    return mock
+
+
+def close_driver(driver: ScreenDriver | None) -> None:
+    """尽力关闭驱动（真实驱动的空闲微动线程必须显式收尾）。"""
+
+    if driver is None:
+        return
+    closer = getattr(driver, "close", None)
+    if not callable(closer):
+        return
+    try:
+        closer()
+    except Exception:  # pragma: no cover - 收尾失败不应覆盖主流程结果
+        logger.exception("关闭屏幕驱动失败")
+
+
 def build_engines(
     plan: CapturePlan,
     project_root: str | Path,
 ) -> tuple[ScreenDriver, OcrEngine, LLMClient]:
     """按计划中的 engine/llm 选项构建真实或 mock 引擎。"""
 
-    if plan.run.engine == "real":
-        from .capture.pyautogui_driver import PyAutoGuiDriver
+    driver = build_driver(plan, project_root)
+    try:
+        if plan.run.engine == "real":
+            from .ocr.paddle_engine import PaddleOcrEngine
 
-        driver: ScreenDriver = PyAutoGuiDriver()
-        logger.info("使用真实屏幕驱动（pyautogui）")
-    else:
-        scenario_path = resolve_project_path(project_root, plan.run.mock_scenario)
-        driver = MockScreenDriver.from_file(
-            scenario_path,
-            plan.regions,
-            screen_size=(plan.screen.width, plan.screen.height),
-            px_per_scroll_unit=plan.run.px_per_scroll_unit,
-        )
-        logger.info("使用 mock 屏幕驱动，场景：%s", scenario_path)
+            ocr: OcrEngine = PaddleOcrEngine()
+            logger.info("使用 PaddleOCR 真实识别")
+        else:
+            ocr = MockOcrEngine()
+            logger.info("使用 mock OCR（读取场景文本）")
 
-    if plan.run.engine == "real":
-        from .ocr.paddle_engine import PaddleOcrEngine
-
-        ocr: OcrEngine = PaddleOcrEngine()
-        logger.info("使用 PaddleOCR 真实识别")
-    else:
-        ocr = MockOcrEngine()
-        logger.info("使用 mock OCR（读取场景文本）")
-
-    llm = build_llm(plan)
+        llm = build_llm(plan)
+    except Exception:
+        # OCR/大模型构建失败时别把已启动的驱动线程留在后台
+        close_driver(driver)
+        raise
 
     return driver, ocr, llm

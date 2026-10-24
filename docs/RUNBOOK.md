@@ -102,6 +102,63 @@ python -m pip install streamlit streamlit-image-coordinates
 
 最后在“输出映射”中选择标题区域 `C`、描述区域 `B`。
 
+## 5.1 拟人化输入保护（`run.humanize`，文件配置）
+
+真实驱动内置了拟人化保护，默认开启；**前端不提供这些开关的界面**，直接编辑计划
+JSON 的 `run.humanize` 即可。所有字段都可省略，省略时使用下表默认值。
+
+```json
+"run": {
+  "engine": "real",
+  "humanize": {
+    "enabled": true,
+    "idle_wander": true,
+    "block_every": [12, 30],
+    "block_duration": [1.5, 5.0],
+    "pre_click_pause": [0.08, 0.28],
+    "drift_px": 1.5
+  }
+}
+```
+
+| 键 | 默认值 | 说明 |
+| --- | --- | --- |
+| `enabled` | `true` | 总开关；`false` 时完全退回原生 pyautogui 行为 |
+| `idle_wander` | `true` | 长时间无操作时是否启动后台微动线程 |
+| `move_duration` | `[0.18, 0.55]` | 单次移动耗时区间（秒） |
+| `move_max_duration` | `1.2` | 单次移动耗时上限（秒） |
+| `curve_bend` | `[0.06, 0.20]` | 贝塞尔弯曲幅度（相对距离，绝对上限 40px） |
+| `tremor_px` | `0.8` | 移动过程手抖标准差（像素） |
+| `settle_times` | `[1, 3]` | 落点微调次数 |
+| `overshoot_px` | `[10, 110]` | 过冲距离（像素） |
+| `overshoot_chance` | `0.85` | 过冲概率 |
+| `drift_px` | `1.5` | 终点误差漂移半径（像素） |
+| `pre_click_pause` | `[0.08, 0.28]` | 移动→点击确认停顿（秒） |
+| `action_gap` | `[0.08, 0.30]` | 动作之间的自然间隔（秒） |
+| `scroll_step` | `[110, 130]` | 滚动分步的每步格数（与 `scroll_distance` 同单位） |
+| `scroll_interval` | `[0.03, 0.12]` | 滚动步间隔（秒） |
+| `scroll_overshoot` | `true` | 滚动末尾多滚一格再回拉 |
+| `fidget_chance` | `0.15` | 动作间隙无意义晃动概率 |
+| `fidget_px` | `[1, 4]` | 晃动的单次偏移幅度（像素） |
+| `idle_after` | `[8.0, 20.0]` | 判定“无操作”的空闲时长（秒） |
+| `idle_interval` | `[1.0, 4.0]` | 空闲状态下两次微动的间隔（秒） |
+| `idle_px` | `[1, 2]` | 空闲微动幅度（像素） |
+| `block_every` | `[12, 30]` | 每多少次动作插入一次阻塞停顿；`null` 关闭 |
+| `block_duration` | `[1.5, 5.0]` | 每次阻塞停顿时长（秒） |
+
+关闭方式（任选其一）：
+
+```powershell
+# 单次运行临时关闭（优先级最高，便于测试/排障）
+$env:RECRUITING_CAPTURE_HUMANIZE = "0"
+
+# 或在计划文件里写死
+# "humanize": {"enabled": false}
+```
+
+生命周期约定：倒计时与“等待继续/结束”期间会自动暂停空闲微动，避免后台线程
+碰鼠标；运行结束（含异常）时由编排器统一关闭驱动线程。命中左上角急停仍然有效。
+
 ## 6. 滚动测试（FR-04）
 
 1. 打开“③ 滚动测试”，选择区域；

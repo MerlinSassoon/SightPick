@@ -21,6 +21,7 @@ from .config import (
     default_sms_config,
     default_transcribe_config,
 )
+from .humanize import HumanizeConfig, HumanProfile
 from .plan_io import load_plan, plan_from_dict, plan_to_dict, save_plan
 from .region import (
     Region,
@@ -32,6 +33,8 @@ from .region import (
 
 __all__ = [
     "CapturePlan",
+    "HumanizeConfig",
+    "HumanProfile",
     "OutputConfig",
     "Region",
     "RegionConfig",

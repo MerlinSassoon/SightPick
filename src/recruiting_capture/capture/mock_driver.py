@@ -94,6 +94,9 @@ class MockScreenDriver:
     def size(self) -> tuple[int, int]:
         return self.screen_size
 
+    def close(self) -> None:
+        """与真实驱动保持同样的生命周期接口（mock 没有后台线程）。"""
+
     def move_to(self, x: int, y: int, duration: float = 0.01) -> None:
         self.position = (int(x), int(y))
 

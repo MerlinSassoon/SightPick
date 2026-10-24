@@ -18,7 +18,8 @@
 | 异步去噪 worker（有界队列 + 屏障） | ✅ |
 | JSONL 增量落盘 + 运行报告 | ✅ |
 | 3–5 条小批量真实运行 | ✅ 稳定批次 5 次，19 条，0 warning |
-| 20 条 / ground truth / 成本 | ⏳ 未完成 |
+| 大批量压力运行 | ✅ 单批 381 条 / 94 分钟（`ui_20261024-103521_145db8`），但冗余 29.4% |
+| 20 条 / ground truth / 成本 | ⏳ 未完成（验收计划见 [TEST_REPORT_20261024.md](TEST_REPORT_20261024.md) §4.1） |
 | 标题/描述质量 | ⚠️ 未达标 |
 | 多领域复用 | ⚠️ 架构上可行，尚未用第二个领域验证 |
 
@@ -123,6 +124,7 @@
 ## 6. 相关文档
 
 - [EVIDENCE.md](EVIDENCE.md)：当前证据与目标
+- [TEST_REPORT_20261024.md](TEST_REPORT_20261024.md)：最新单批次测试报告与下阶段 Action 清单
 - [ARCHITECTURE.md](ARCHITECTURE.md)：扩展点与领域边界
 - [PRIVACY.md](PRIVACY.md)：隐私与合规
 - [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md)：发布前检查
